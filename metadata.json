@@ -1,0 +1,6 @@
+{
+  "name": "HomeStock - Household Inventory & Shopping Manager",
+  "description": "Household inventory management app with item tracking, stock increment/decrement, monthly targets, automatic restock quantity calculations, and smart shopping list.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

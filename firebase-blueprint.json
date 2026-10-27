@@ -1,0 +1,111 @@
+{
+  "entities": {
+    "Item": {
+      "title": "Item",
+      "description": "A household inventory item with stock targets and current quantity",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the item"
+        },
+        "userId": {
+          "type": "string",
+          "description": "User ID of the inventory owner"
+        },
+        "itemName": {
+          "type": "string",
+          "description": "Display name of the item",
+          "maxLength": 150
+        },
+        "category": {
+          "type": "string",
+          "description": "Category classification of the item",
+          "maxLength": 80
+        },
+        "photo": {
+          "type": "string",
+          "description": "URL of the item photo",
+          "maxLength": 1000
+        },
+        "targetMonthlyStock": {
+          "type": "number",
+          "description": "Target monthly stock quantity"
+        },
+        "currentStock": {
+          "type": "number",
+          "description": "Current on-hand stock quantity"
+        },
+        "unit": {
+          "type": "string",
+          "description": "Unit of measurement or packaging container",
+          "maxLength": 50
+        },
+        "location": {
+          "type": "string",
+          "description": "Physical storage location in the home",
+          "maxLength": 100
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional notes or details",
+          "maxLength": 500
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last update"
+        }
+      },
+      "required": [
+        "userId",
+        "itemName",
+        "category",
+        "targetMonthlyStock",
+        "currentStock"
+      ]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Basic user profile data",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth user identifier"
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address",
+          "maxLength": 150
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name",
+          "maxLength": 100
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "User profile photo URL",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Account registration timestamp"
+        }
+      },
+      "required": [
+        "uid"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document restricted to the authenticated user"
+    },
+    "/users/{userId}/items/{itemId}": {
+      "schema": "Item",
+      "description": "Household inventory items belonging to the user"
+    }
+  }
+}

@@ -1,0 +1,56 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // User Profile
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create, update: if isOwner(userId) && request.resource.data.uid == userId;
+      allow delete: if false;
+
+      // User's Household Inventory Items
+      match /items/{itemId} {
+        allow get, list: if isOwner(userId);
+        
+        allow create: if isOwner(userId) 
+          && isValidId(itemId)
+          && request.resource.data.userId == userId
+          && request.resource.data.itemName is string
+          && request.resource.data.itemName.size() > 0
+          && request.resource.data.itemName.size() <= 150
+          && request.resource.data.targetMonthlyStock is number
+          && request.resource.data.targetMonthlyStock >= 0
+          && request.resource.data.currentStock is number
+          && request.resource.data.currentStock >= 0;
+
+        allow update: if isOwner(userId)
+          && isValidId(itemId)
+          && request.resource.data.userId == userId
+          && request.resource.data.targetMonthlyStock is number
+          && request.resource.data.targetMonthlyStock >= 0
+          && request.resource.data.currentStock is number
+          && request.resource.data.currentStock >= 0;
+
+        allow delete: if isOwner(userId) && isValidId(itemId);
+      }
+    }
+  }
+}
