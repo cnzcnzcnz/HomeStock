@@ -489,6 +489,36 @@ export async function acceptHouseholdInvite(
 }
 
 /**
+ * Retrieve any legacy items stored under /users/{userId}/items (before household sharing)
+ */
+export async function getLegacyUserItems(userId: string): Promise<Item[]> {
+  try {
+    const colRef = collection(db, 'users', userId, 'items');
+    const snap = await getDocs(colRef);
+    const legacy: Item[] = [];
+    snap.forEach(docSnap => {
+      const data = docSnap.data();
+      legacy.push({
+        id: docSnap.id,
+        itemName: data.itemName || '',
+        category: data.category || 'General Supplies',
+        photo: data.photo || '',
+        targetMonthlyStock: Number(data.targetMonthlyStock) || 0,
+        currentStock: Number(data.currentStock) || 0,
+        unit: data.unit || 'units',
+        location: data.location || '',
+        notes: data.notes || '',
+        updatedAt: data.updatedAt || new Date().toISOString()
+      });
+    });
+    return legacy;
+  } catch (err) {
+    console.warn('Could not read legacy user items:', err);
+    return [];
+  }
+}
+
+/**
  * Check if the user's cloud inventory has already been initialized (backward compatibility)
  */
 export async function isUserCloudInitialized(userId: string): Promise<boolean> {

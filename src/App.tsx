@@ -31,7 +31,8 @@ import {
   checkPendingInvites,
   acceptHouseholdInvite,
   isUserCloudInitialized,
-  markUserCloudInitialized
+  markUserCloudInitialized,
+  getLegacyUserItems
 } from './lib/firebase';
 import { Check, Info, AlertCircle, Cloud, Users, Sparkles } from 'lucide-react';
 
@@ -134,20 +135,31 @@ export default function App() {
                 if (!alreadyInitialized) {
                   await markUserCloudInitialized(user.uid);
                 }
-              } else if (!alreadyInitialized) {
-                // First-time sync: seed current items or default sample items into the household
-                await markUserCloudInitialized(user.uid);
-                const itemsToMigrate = items.length > 0 ? items : INITIAL_ITEMS;
-                try {
-                  await seedHouseholdItems(activeHousehold.id, itemsToMigrate, user);
-                  setItems(itemsToMigrate);
-                  showToast('Created shared family household inventory!', 'success');
-                } catch (err) {
-                  console.error('Failed to seed household items', err);
-                }
               } else {
-                // Household inventory is currently empty
-                setItems([]);
+                // Household has 0 items. Check if the user previously had items in /users/{userId}/items
+                try {
+                  const legacyItems = await getLegacyUserItems(user.uid);
+                  if (legacyItems.length > 0) {
+                    await seedHouseholdItems(activeHousehold.id, legacyItems, user);
+                    setItems(legacyItems);
+                    showToast('Restored all your previous items into your shared family pantry!', 'success');
+                    return;
+                  }
+                } catch (e) {
+                  console.warn('Legacy migration check notice', e);
+                }
+
+                // If no legacy cloud items, check if current browser has cached items
+                const localCached = loadStoredItems();
+                if (localCached.length > 0) {
+                  await seedHouseholdItems(activeHousehold.id, localCached, user);
+                  setItems(localCached);
+                  showToast('Synced your household inventory to the cloud!', 'success');
+                } else if (!alreadyInitialized) {
+                  await markUserCloudInitialized(user.uid);
+                  await seedHouseholdItems(activeHousehold.id, INITIAL_ITEMS, user);
+                  setItems(INITIAL_ITEMS);
+                }
               }
             },
             (err) => {
