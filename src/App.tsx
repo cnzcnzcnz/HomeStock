@@ -6,7 +6,10 @@ import { ItemsTable } from './components/ItemsTable';
 import { ShoppingListView } from './components/ShoppingListView';
 import { ItemModal } from './components/ItemModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
+import { HouseholdModal } from './components/HouseholdModal';
+import { PendingInviteBanner } from './components/PendingInviteBanner';
 import { Item, ViewTab } from './types/inventory';
+import { Household, HouseholdInvite } from './types/household';
 import {
   loadStoredItems,
   saveStoredItems,
@@ -19,24 +22,35 @@ import {
   auth,
   loginWithGoogle,
   logoutUser,
-  subscribeToUserItems,
-  saveCloudItem,
-  deleteCloudItem,
-  seedCloudItems,
+  getOrCreateHousehold,
+  subscribeToHousehold,
+  subscribeToHouseholdItems,
+  saveHouseholdItem,
+  deleteHouseholdItem,
+  seedHouseholdItems,
+  checkPendingInvites,
+  acceptHouseholdInvite,
   isUserCloudInitialized,
   markUserCloudInitialized
 } from './lib/firebase';
-import { Check, Info, AlertCircle, Cloud } from 'lucide-react';
+import { Check, Info, AlertCircle, Cloud, Users, Sparkles } from 'lucide-react';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [household, setHousehold] = useState<Household | null>(null);
   const [items, setItems] = useState<Item[]>(() => loadStoredItems());
   const [currentTab, setCurrentTab] = useState<ViewTab>('grid');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isHouseholdModalOpen, setIsHouseholdModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [deletingItem, setDeletingItem] = useState<Item | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [pendingInvite, setPendingInvite] = useState<HouseholdInvite | null>(null);
+  const [isAcceptingInvite, setIsAcceptingInvite] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'warning' } | null>(null);
+
+  const householdRef = useRef<Household | null>(null);
+  householdRef.current = household;
 
   const showToast = (message: string, type: 'success' | 'info' | 'warning' = 'info') => {
     setToast({ message, type });
@@ -45,70 +59,123 @@ export default function App() {
     }, 3200);
   };
 
-  // Auth state listener & Cloud Firestore synchronization
+  // Auth state listener & Family Household Firestore synchronization
   useEffect(() => {
-    let unsubscribeFirestore: (() => void) | null = null;
+    let unsubscribeHousehold: (() => void) | null = null;
+    let unsubscribeItems: (() => void) | null = null;
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
 
-      if (unsubscribeFirestore) {
-        unsubscribeFirestore();
-        unsubscribeFirestore = null;
+      if (unsubscribeHousehold) {
+        unsubscribeHousehold();
+        unsubscribeHousehold = null;
+      }
+      if (unsubscribeItems) {
+        unsubscribeItems();
+        unsubscribeItems = null;
       }
 
       if (user) {
         setIsSyncing(true);
         showToast(`Signed in as ${user.displayName || user.email}`, 'success');
 
-        // Check permanent initialization state in Firestore
-        const alreadyInitialized = await isUserCloudInitialized(user.uid);
+        // Optimistically initialize household so the Family modal always opens immediately
+        const optimisticHousehold: Household = {
+          id: `household-${user.uid.slice(0, 12)}`,
+          name: `${user.displayName || user.email?.split('@')[0] || 'My'}'s Family Pantry`,
+          ownerUid: user.uid,
+          memberUids: [user.uid],
+          memberEmails: user.email ? [user.email.toLowerCase()] : [],
+          members: [{
+            uid: user.uid,
+            email: user.email ? user.email.toLowerCase() : '',
+            displayName: user.displayName || user.email?.split('@')[0] || 'Family Member',
+            photoURL: user.photoURL || undefined,
+            role: 'owner',
+            joinedAt: new Date().toISOString()
+          }],
+          createdAt: new Date().toISOString(),
+          inviteCode: `FAM-${user.uid.slice(0, 6).toUpperCase()}`
+        };
+        setHousehold(prev => prev || optimisticHousehold);
 
-        // Listen to Firestore changes in real-time
-        unsubscribeFirestore = subscribeToUserItems(
-          user.uid,
-          async (cloudItems) => {
-            setIsSyncing(false);
-            if (cloudItems.length > 0) {
-              setItems(cloudItems);
-              if (!alreadyInitialized) {
-                await markUserCloudInitialized(user.uid);
+        try {
+          // 1. Check for any pending family invitations for this user's Google email
+          if (user.email) {
+            try {
+              const invites = await checkPendingInvites(user.email);
+              if (invites.length > 0) {
+                setPendingInvite(invites[0]);
               }
-            } else if (!alreadyInitialized) {
-              // Brand new user: Seed initial items once
-              await markUserCloudInitialized(user.uid);
-              const itemsToMigrate = items.length > 0 ? items : INITIAL_ITEMS;
-              try {
-                await seedCloudItems(user.uid, itemsToMigrate);
-                setItems(itemsToMigrate);
-                showToast('Synced your household inventory to the cloud!', 'success');
-              } catch (err) {
-                console.error('Failed to seed cloud items', err);
-              }
-            } else {
-              // User has an already-initialized inventory that is currently empty (e.g. user deleted all items)
-              setItems([]);
+            } catch (err) {
+              console.warn('Pending invites query warning', err);
             }
-          },
-          (err) => {
-            setIsSyncing(false);
-            console.error('Firestore listener error', err);
-            showToast('Cloud sync connection notice: using offline state', 'warning');
           }
-        );
+
+          // 2. Load or create the user's primary/active household
+          const activeHousehold = await getOrCreateHousehold(user);
+          setHousehold(activeHousehold);
+
+          // 3. Subscribe to real-time updates for household metadata (members list, invite changes)
+          unsubscribeHousehold = subscribeToHousehold(activeHousehold.id, (updatedHousehold) => {
+            setHousehold(updatedHousehold);
+          });
+
+          // 4. Subscribe to shared household inventory items
+          const alreadyInitialized = await isUserCloudInitialized(user.uid);
+
+          unsubscribeItems = subscribeToHouseholdItems(
+            activeHousehold.id,
+            async (sharedItems) => {
+              setIsSyncing(false);
+              if (sharedItems.length > 0) {
+                setItems(sharedItems);
+                if (!alreadyInitialized) {
+                  await markUserCloudInitialized(user.uid);
+                }
+              } else if (!alreadyInitialized) {
+                // First-time sync: seed current items or default sample items into the household
+                await markUserCloudInitialized(user.uid);
+                const itemsToMigrate = items.length > 0 ? items : INITIAL_ITEMS;
+                try {
+                  await seedHouseholdItems(activeHousehold.id, itemsToMigrate, user);
+                  setItems(itemsToMigrate);
+                  showToast('Created shared family household inventory!', 'success');
+                } catch (err) {
+                  console.error('Failed to seed household items', err);
+                }
+              } else {
+                // Household inventory is currently empty
+                setItems([]);
+              }
+            },
+            (err) => {
+              setIsSyncing(false);
+              console.warn('Household items listener warning', err);
+            }
+          );
+        } catch (error) {
+          setIsSyncing(false);
+          console.error('Failed to initialize household', error);
+          showToast('Could not load family household. Working offline.', 'warning');
+        }
       } else {
-        // Logged out
+        // User logged out: clear household context and return to local storage
+        setHousehold(null);
+        setPendingInvite(null);
         setItems(loadStoredItems());
       }
     });
 
     return () => {
-      if (unsubscribeFirestore) unsubscribeFirestore();
+      if (unsubscribeHousehold) unsubscribeHousehold();
+      if (unsubscribeItems) unsubscribeItems();
       unsubscribeAuth();
     };
   }, []);
 
-  // Save to localStorage as backup/offline cache
+  // Save to localStorage as offline cache
   useEffect(() => {
     saveStoredItems(items);
   }, [items]);
@@ -128,9 +195,30 @@ export default function App() {
   const handleGoogleLogout = async () => {
     try {
       await logoutUser();
+      setHousehold(null);
+      setPendingInvite(null);
       showToast('Signed out of cloud account', 'info');
     } catch (error) {
       console.error('Logout error', error);
+    }
+  };
+
+  // Accept a pending family invite
+  const handleAcceptInvite = async (invite: HouseholdInvite) => {
+    if (!currentUser) return;
+    setIsAcceptingInvite(true);
+    try {
+      const joinedHousehold = await acceptHouseholdInvite(invite, currentUser);
+      setHousehold(joinedHousehold);
+      setPendingInvite(null);
+      showToast(`Welcome! You joined ${invite.householdName}`, 'success');
+      // Trigger full page reload to seamlessly bind all listeners to the joined household
+      window.location.reload();
+    } catch (error: any) {
+      console.error('Failed to accept invite', error);
+      showToast(error.message || 'Could not join household', 'warning');
+    } finally {
+      setIsAcceptingInvite(false);
     }
   };
 
@@ -149,11 +237,12 @@ export default function App() {
 
     setItems(updated);
 
-    if (currentUser) {
+    const currentH = householdRef.current;
+    if (currentH && currentUser) {
       const changed = updated.find(i => i.id === id);
       if (changed) {
         try {
-          await saveCloudItem(currentUser.uid, changed);
+          await saveHouseholdItem(currentH.id, changed, currentUser);
         } catch (e) {
           console.error(e);
         }
@@ -176,11 +265,12 @@ export default function App() {
 
     setItems(updated);
 
-    if (currentUser) {
+    const currentH = householdRef.current;
+    if (currentH && currentUser) {
       const changed = updated.find(i => i.id === id);
       if (changed) {
         try {
-          await saveCloudItem(currentUser.uid, changed);
+          await saveHouseholdItem(currentH.id, changed, currentUser);
         } catch (e) {
           console.error(e);
         }
@@ -203,11 +293,12 @@ export default function App() {
 
     setItems(updated);
 
-    if (currentUser) {
+    const currentH = householdRef.current;
+    if (currentH && currentUser) {
       const changed = updated.find(i => i.id === id);
       if (changed) {
         try {
-          await saveCloudItem(currentUser.uid, changed);
+          await saveHouseholdItem(currentH.id, changed, currentUser);
         } catch (e) {
           console.error(e);
         }
@@ -232,9 +323,10 @@ export default function App() {
 
     setItems(updated);
 
-    if (currentUser) {
+    const currentH = householdRef.current;
+    if (currentH && currentUser) {
       try {
-        await seedCloudItems(currentUser.uid, updated);
+        await seedHouseholdItems(currentH.id, updated, currentUser);
       } catch (e) {
         console.error(e);
       }
@@ -242,8 +334,9 @@ export default function App() {
     showToast('All shopping list items restocked to target!', 'success');
   };
 
-  // Save (add or edit)
+  // Save (add or edit) item
   const handleSaveItem = async (itemData: Omit<Item, 'id' | 'updatedAt'>, editId?: string) => {
+    const currentH = householdRef.current;
     if (editId) {
       const updatedItem: Item = {
         ...itemData,
@@ -251,8 +344,8 @@ export default function App() {
         updatedAt: new Date().toISOString()
       };
       setItems(prev => prev.map(i => (i.id === editId ? updatedItem : i)));
-      if (currentUser) {
-        await saveCloudItem(currentUser.uid, updatedItem);
+      if (currentH && currentUser) {
+        await saveHouseholdItem(currentH.id, updatedItem, currentUser);
       }
       showToast(`Updated "${itemData.itemName}"`, 'success');
     } else {
@@ -262,8 +355,8 @@ export default function App() {
         updatedAt: new Date().toISOString()
       };
       setItems(prev => [newItem, ...prev]);
-      if (currentUser) {
-        await saveCloudItem(currentUser.uid, newItem);
+      if (currentH && currentUser) {
+        await saveHouseholdItem(currentH.id, newItem, currentUser);
       }
       showToast(`Added "${newItem.itemName}" to inventory`, 'success');
     }
@@ -273,9 +366,9 @@ export default function App() {
   const handleDeleteItem = async (id: string) => {
     try {
       setItems(prev => prev.filter(i => i.id !== id));
-      const activeUser = currentUser || auth.currentUser;
-      if (activeUser) {
-        await deleteCloudItem(activeUser.uid, id);
+      const currentH = householdRef.current;
+      if (currentH) {
+        await deleteHouseholdItem(currentH.id, id);
       }
       showToast('Item deleted', 'info');
     } catch (err) {
@@ -288,8 +381,9 @@ export default function App() {
   const handleResetSampleData = async () => {
     if (window.confirm('Reset all inventory to sample default items?')) {
       setItems(INITIAL_ITEMS);
-      if (currentUser) {
-        await seedCloudItems(currentUser.uid, INITIAL_ITEMS);
+      const currentH = householdRef.current;
+      if (currentH && currentUser) {
+        await seedHouseholdItems(currentH.id, INITIAL_ITEMS, currentUser);
       }
       showToast('Inventory reset to sample household presets', 'info');
     }
@@ -299,7 +393,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-stone-50 text-stone-900 flex flex-col font-sans">
-      {/* Navigation Bar with Tabs & Google Login */}
+      {/* Navigation Bar with Tabs & Google Login & Family Share Button */}
       <Navbar
         currentTab={currentTab}
         onTabChange={setCurrentTab}
@@ -314,20 +408,50 @@ export default function App() {
         onLogin={handleGoogleLogin}
         onLogout={handleGoogleLogout}
         isSyncing={isSyncing}
+        household={household}
+        onOpenHousehold={() => setIsHouseholdModalOpen(true)}
       />
 
-      {/* Cloud Banner notification when connected */}
+      {/* Cloud & Family Status Banner when connected */}
       {currentUser && (
-        <div className="bg-emerald-900 text-emerald-100 text-xs py-1.5 px-4 text-center border-b border-emerald-800 flex items-center justify-center space-x-2">
-          <Cloud className="w-3.5 h-3.5 text-emerald-400" />
-          <span>
-            Connected to <strong>Google Cloud Firestore</strong> ({currentUser.email}). Changes sync automatically across all devices.
-          </span>
+        <div className="bg-emerald-900 text-emerald-100 text-xs py-2 px-4 border-b border-emerald-800 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center space-x-2">
+            <Cloud className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span>
+              Connected to <strong>{household?.name || 'Household Inventory'}</strong>
+              {household?.members && household.members.length > 1 && (
+                <span className="ml-1.5 inline-flex items-center text-amber-300 font-semibold">
+                  <Users className="w-3 h-3 mr-1 inline" />
+                  {household.members.length} members sharing
+                </span>
+              )}
+              {' '}• Signed in as <em>{currentUser.email}</em>
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsHouseholdModalOpen(true)}
+            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-emerald-800 hover:bg-emerald-700 text-white rounded-md text-[11px] font-semibold transition-all border border-emerald-700 shadow-sm"
+          >
+            <Users className="w-3 h-3 text-amber-400" />
+            <span>Manage Family Sharing</span>
+          </button>
         </div>
       )}
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        {/* Pending Invitation Banner if invited by a family member */}
+        {pendingInvite && (
+          <PendingInviteBanner
+            invite={pendingInvite}
+            onAccept={handleAcceptInvite}
+            onDismiss={() => setPendingInvite(null)}
+            isAccepting={isAcceptingInvite}
+          />
+        )}
+
         {currentTab === 'grid' && (
           <GridView
             items={items}
@@ -374,7 +498,7 @@ export default function App() {
         )}
       </main>
 
-      {/* Add / Edit Modal */}
+      {/* Add / Edit Item Modal */}
       <ItemModal
         isOpen={isModalOpen}
         onClose={() => {
@@ -393,6 +517,18 @@ export default function App() {
         onConfirm={handleDeleteItem}
       />
 
+      {/* Household & Family Members Management Modal */}
+      <HouseholdModal
+        isOpen={isHouseholdModalOpen}
+        onClose={() => setIsHouseholdModalOpen(false)}
+        household={household}
+        currentUser={currentUser}
+        onInviteSuccess={(invite) => {
+          showToast(`Invitation sent to ${invite.invitedEmail}!`, 'success');
+        }}
+        onLoginRequest={handleGoogleLogin}
+      />
+
       {/* Toast Notification */}
       {toast && (
         <div className="fixed bottom-5 right-5 z-50 flex items-center space-x-2 px-4 py-2.5 rounded-xl shadow-lg border text-xs font-semibold animate-in slide-in-from-bottom-2 duration-200 bg-stone-900 text-white border-stone-800">
@@ -406,7 +542,14 @@ export default function App() {
       {/* Footer */}
       <footer className="bg-white border-t border-stone-200 py-6 text-center text-xs text-stone-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>HomeStock • Household Inventory Management System</span>
+          <div className="flex items-center space-x-2">
+            <span>HomeStock • Household Inventory Management System</span>
+            {household && (
+              <span className="hidden sm:inline-flex items-center text-amber-600 font-medium">
+                • {household.name}
+              </span>
+            )}
+          </div>
           <div className="flex items-center space-x-4">
             <button
               type="button"

@@ -1,7 +1,7 @@
-import React from 'react';
-import { LayoutGrid, Table2, ShoppingBag, Plus, Sparkles, RefreshCw, LogOut, Cloud, CloudOff } from 'lucide-react';
+import { LayoutGrid, Table2, ShoppingBag, Plus, Sparkles, RefreshCw, LogOut, Cloud, CloudOff, Users } from 'lucide-react';
 import { User } from 'firebase/auth';
 import { ViewTab } from '../types/inventory';
+import { Household } from '../types/household';
 
 interface NavbarProps {
   currentTab: ViewTab;
@@ -14,6 +14,8 @@ interface NavbarProps {
   onLogin: () => void;
   onLogout: () => void;
   isSyncing?: boolean;
+  household: Household | null;
+  onOpenHousehold: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -26,7 +28,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   user,
   onLogin,
   onLogout,
-  isSyncing
+  isSyncing,
+  household,
+  onOpenHousehold
 }) => {
   return (
     <header className="sticky top-0 z-30 bg-stone-900 text-stone-100 shadow-md border-b border-stone-800">
@@ -146,6 +150,27 @@ export const Navbar: React.FC<NavbarProps> = ({
               <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5]" />
               <span>Add</span>
               <span className="hidden sm:inline">Item</span>
+            </button>
+
+            {/* Family Sharing Button */}
+            <button
+              type="button"
+              onClick={onOpenHousehold}
+              className={`flex items-center space-x-1.5 px-2.5 py-1.5 sm:py-2 rounded-lg border transition-all text-xs font-semibold active:scale-95 shadow-sm cursor-pointer ${
+                user
+                  ? 'bg-stone-800 hover:bg-stone-700 text-stone-200 hover:text-white border-stone-700'
+                  : 'bg-stone-800/60 hover:bg-stone-800 text-stone-300 hover:text-white border-stone-700/80'
+              }`}
+              title="Manage Household & Family Sharing"
+              aria-label="Manage Household and Family Members"
+            >
+              <Users className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" />
+              <span className="hidden sm:inline">Family</span>
+              {household?.members && household.members.length > 1 && (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-500 text-stone-950">
+                  {household.members.length}
+                </span>
+              )}
             </button>
 
             {/* Google Authentication Control */}

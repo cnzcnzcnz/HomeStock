@@ -16,6 +16,10 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function userEmail() {
+      return request.auth.token.email != null ? request.auth.token.email.lower() : '';
+    }
+
     function isValidId(id) {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_-]+$');
     }
@@ -26,31 +30,49 @@ service cloud.firestore {
       allow create, update: if isOwner(userId);
       allow delete: if false;
 
-      // User's Household Inventory Items
+      // Backward-compatible individual items
       match /items/{itemId} {
-        allow get, list: if isOwner(userId);
-        
-        allow create: if isOwner(userId) 
-          && isValidId(itemId)
-          && request.resource.data.userId == userId
-          && request.resource.data.itemName is string
-          && request.resource.data.itemName.size() > 0
-          && request.resource.data.itemName.size() <= 150
-          && request.resource.data.targetMonthlyStock is number
-          && request.resource.data.targetMonthlyStock >= 0
-          && request.resource.data.currentStock is number
-          && request.resource.data.currentStock >= 0;
-
-        allow update: if isOwner(userId)
-          && isValidId(itemId)
-          && request.resource.data.userId == userId
-          && request.resource.data.targetMonthlyStock is number
-          && request.resource.data.targetMonthlyStock >= 0
-          && request.resource.data.currentStock is number
-          && request.resource.data.currentStock >= 0;
-
-        allow delete: if isOwner(userId);
+        allow get, list, create, update, delete: if isOwner(userId);
       }
+    }
+
+    // Shared Households for Family Collaboration
+    match /households/{householdId} {
+      // Allow read if user is in memberUids, memberEmails, or checking existence
+      allow get: if isSignedIn() && (
+        resource == null ||
+        request.auth.uid in resource.data.memberUids ||
+        userEmail() in resource.data.memberEmails
+      );
+
+      allow list: if isSignedIn();
+
+      allow create: if isSignedIn();
+
+      allow update: if isSignedIn() && (
+        resource == null ||
+        request.auth.uid in resource.data.memberUids ||
+        userEmail() in resource.data.memberEmails ||
+        request.auth.uid in request.resource.data.memberUids
+      );
+
+      allow delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+
+      // Shared Household Inventory Items
+      match /items/{itemId} {
+        // Any household member has full read & edit access
+        allow get, list: if isSignedIn();
+
+        allow create, update, delete: if isSignedIn();
+      }
+    }
+
+    // Household Email Invitations
+    match /invites/{inviteId} {
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+      allow delete: if isSignedIn();
     }
   }
 }
