@@ -10,6 +10,7 @@ import {
 import {
   getFirestore,
   doc,
+  getDoc,
   getDocFromServer,
   collection,
   onSnapshot,
@@ -224,3 +225,28 @@ export async function deleteCloudItem(userId: string, itemId: string): Promise<v
     handleFirestoreError(error, OperationType.DELETE, itemPath);
   }
 }
+
+/**
+ * Check if the user's cloud inventory has already been initialized
+ */
+export async function isUserCloudInitialized(userId: string): Promise<boolean> {
+  try {
+    const userSnap = await getDoc(doc(db, 'users', userId));
+    return userSnap.exists() && userSnap.data()?.hasInitialized === true;
+  } catch (e) {
+    console.warn('Could not read user profile initialization state', e);
+    return false;
+  }
+}
+
+/**
+ * Mark user cloud inventory as initialized
+ */
+export async function markUserCloudInitialized(userId: string): Promise<void> {
+  try {
+    await setDoc(doc(db, 'users', userId), { hasInitialized: true }, { merge: true });
+  } catch (e) {
+    console.warn('Could not mark user profile as initialized', e);
+  }
+}
+
