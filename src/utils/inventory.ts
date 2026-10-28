@@ -249,15 +249,23 @@ export const INITIAL_ITEMS: Item[] = [
 ];
 
 const STORAGE_KEY = 'homestock_inventory_items_v1';
+const INITIALIZED_KEY = 'homestock_initialized_v1';
 
 export function loadStoredItems(): Item[] {
   if (typeof window === 'undefined') return INITIAL_ITEMS;
   try {
+    const isInitialized = localStorage.getItem(INITIALIZED_KEY);
+    if (!isInitialized) {
+      localStorage.setItem(INITIALIZED_KEY, 'true');
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_ITEMS));
+      return INITIAL_ITEMS;
+    }
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return INITIAL_ITEMS;
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed;
+    if (raw !== null) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
     }
     return INITIAL_ITEMS;
   } catch {

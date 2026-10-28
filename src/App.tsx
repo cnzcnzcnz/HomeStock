@@ -22,7 +22,9 @@ import {
   subscribeToUserItems,
   saveCloudItem,
   deleteCloudItem,
-  seedCloudItems
+  seedCloudItems,
+  isUserCloudInitialized,
+  markUserCloudInitialized
 } from './lib/firebase';
 import { Check, Info, AlertCircle, Cloud } from 'lucide-react';
 
@@ -36,8 +38,6 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'warning' } | null>(null);
 
-  const initialCloudSyncDoneRef = useRef(false);
-
   const showToast = (message: string, type: 'success' | 'info' | 'warning' = 'info') => {
     setToast({ message, type });
     setTimeout(() => {
@@ -47,23 +47,36 @@ export default function App() {
 
   // Auth state listener & Cloud Firestore synchronization
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+    let unsubscribeFirestore: (() => void) | null = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
+
+      if (unsubscribeFirestore) {
+        unsubscribeFirestore();
+        unsubscribeFirestore = null;
+      }
+
       if (user) {
         setIsSyncing(true);
         showToast(`Signed in as ${user.displayName || user.email}`, 'success');
-        
+
+        // Check permanent initialization state in Firestore
+        const alreadyInitialized = await isUserCloudInitialized(user.uid);
+
         // Listen to Firestore changes in real-time
-        const unsubscribeFirestore = subscribeToUserItems(
+        unsubscribeFirestore = subscribeToUserItems(
           user.uid,
           async (cloudItems) => {
             setIsSyncing(false);
             if (cloudItems.length > 0) {
               setItems(cloudItems);
-              initialCloudSyncDoneRef.current = true;
-            } else if (!initialCloudSyncDoneRef.current) {
-              // User has empty cloud inventory - seed existing items to cloud
-              initialCloudSyncDoneRef.current = true;
+              if (!alreadyInitialized) {
+                await markUserCloudInitialized(user.uid);
+              }
+            } else if (!alreadyInitialized) {
+              // Brand new user: Seed initial items once
+              await markUserCloudInitialized(user.uid);
               const itemsToMigrate = items.length > 0 ? items : INITIAL_ITEMS;
               try {
                 await seedCloudItems(user.uid, itemsToMigrate);
@@ -72,6 +85,9 @@ export default function App() {
               } catch (err) {
                 console.error('Failed to seed cloud items', err);
               }
+            } else {
+              // User has an already-initialized inventory that is currently empty (e.g. user deleted all items)
+              setItems([]);
             }
           },
           (err) => {
@@ -80,18 +96,16 @@ export default function App() {
             showToast('Cloud sync connection notice: using offline state', 'warning');
           }
         );
-
-        return () => {
-          unsubscribeFirestore();
-        };
       } else {
         // Logged out
-        initialCloudSyncDoneRef.current = false;
         setItems(loadStoredItems());
       }
     });
 
-    return () => unsubscribeAuth();
+    return () => {
+      if (unsubscribeFirestore) unsubscribeFirestore();
+      unsubscribeAuth();
+    };
   }, []);
 
   // Save to localStorage as backup/offline cache
@@ -257,11 +271,17 @@ export default function App() {
 
   // Delete item
   const handleDeleteItem = async (id: string) => {
-    setItems(prev => prev.filter(i => i.id !== id));
-    if (currentUser) {
-      await deleteCloudItem(currentUser.uid, id);
+    try {
+      setItems(prev => prev.filter(i => i.id !== id));
+      const activeUser = currentUser || auth.currentUser;
+      if (activeUser) {
+        await deleteCloudItem(activeUser.uid, id);
+      }
+      showToast('Item deleted', 'info');
+    } catch (err) {
+      console.error('Delete error', err);
+      showToast('Error deleting item from cloud', 'warning');
     }
-    showToast('Item deleted', 'info');
   };
 
   // Reset sample data
