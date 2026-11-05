@@ -65,6 +65,12 @@ service cloud.firestore {
 
         allow create, update, delete: if isSignedIn();
       }
+
+      // Shared Household Shopping & Receipt History Records
+      match /receipts/{receiptId} {
+        allow get, list: if isSignedIn();
+        allow create, update, delete: if isSignedIn();
+      }
     }
 
     // Household Email Invitations

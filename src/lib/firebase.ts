@@ -23,7 +23,7 @@ import {
   Unsubscribe
 } from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured } from './config';
-import { Item } from '../types/inventory';
+import { Item, ShoppingReceiptRecord } from '../types/inventory';
 import { Household, HouseholdInvite, HouseholdMember } from '../types/household';
 
 // Initialize Firebase with resolved configuration
@@ -541,3 +541,64 @@ export async function markUserCloudInitialized(userId: string): Promise<void> {
     console.warn('Could not mark user profile as initialized', e);
   }
 }
+
+/**
+ * Save a shopping receipt history record to the shared household
+ */
+export async function saveHouseholdReceipt(
+  householdId: string,
+  receipt: ShoppingReceiptRecord
+): Promise<void> {
+  const receiptPath = `households/${householdId}/receipts/${receipt.id}`;
+  try {
+    const receiptRef = doc(db, 'households', householdId, 'receipts', receipt.id);
+    await setDoc(receiptRef, receipt, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, receiptPath);
+  }
+}
+
+/**
+ * Delete a shopping receipt history record from the household
+ */
+export async function deleteHouseholdReceipt(
+  householdId: string,
+  receiptId: string
+): Promise<void> {
+  const receiptPath = `households/${householdId}/receipts/${receiptId}`;
+  try {
+    const receiptRef = doc(db, 'households', householdId, 'receipts', receiptId);
+    await deleteDoc(receiptRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, receiptPath);
+  }
+}
+
+/**
+ * Subscribe to household shopping receipt history in real-time
+ */
+export function subscribeToHouseholdReceipts(
+  householdId: string,
+  onUpdate: (receipts: ShoppingReceiptRecord[]) => void,
+  onError?: (error: unknown) => void
+): Unsubscribe {
+  const receiptsCol = collection(db, 'households', householdId, 'receipts');
+
+  return onSnapshot(
+    receiptsCol,
+    (snapshot) => {
+      const records: ShoppingReceiptRecord[] = [];
+      snapshot.forEach(docSnap => {
+        records.push({ ...(docSnap.data() as ShoppingReceiptRecord), id: docSnap.id });
+      });
+      // Sort newest receipts first
+      records.sort((a, b) => new Date(b.createdAt || b.purchaseDate).getTime() - new Date(a.createdAt || a.purchaseDate).getTime());
+      onUpdate(records);
+    },
+    (error) => {
+      if (onError) onError(error);
+      console.warn('Receipts listener notice:', error);
+    }
+  );
+}
+

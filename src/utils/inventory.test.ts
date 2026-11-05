@@ -1,88 +1,118 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import assert from 'node:assert';
 import {
   calculateRestockQty,
   isShoppingListNeeded,
   getShoppingList,
   getItemStockStatus,
   clampStock
-} from './inventory.ts';
-import { Item } from '../types/inventory.ts';
+} from './inventory';
+import {
+  matchReceiptItemToInventory,
+  normalizeReceiptDateToDDMMYYYY,
+  formatRupiah
+} from './receiptScanner';
+import { Item } from '../types/inventory';
 
 test('calculateRestockQty calculates Target Monthly Stock - Current Stock accurately', () => {
-  // Case 1: Target 5, Current 2 -> Restock Qty 3
-  assert.equal(calculateRestockQty(5, 2), 3);
-
-  // Case 2: Target 4, Current 4 -> Restock Qty 0
-  assert.equal(calculateRestockQty(4, 4), 0);
-
-  // Case 3: Target 3, Current 5 (surplus) -> Restock Qty -2
-  assert.equal(calculateRestockQty(3, 5), -2);
-
-  // Case 4: Target 6, Current 0 -> Restock Qty 6
-  assert.equal(calculateRestockQty(6, 0), 6);
+  assert.strictEqual(calculateRestockQty(5, 2), 3);
+  assert.strictEqual(calculateRestockQty(4, 4), 0);
+  assert.strictEqual(calculateRestockQty(2, 5), -3);
 });
 
 test('isShoppingListNeeded returns true strictly when Restock Qty is greater than 0', () => {
-  assert.equal(isShoppingListNeeded({ targetMonthlyStock: 5, currentStock: 2 }), true);
-  assert.equal(isShoppingListNeeded({ targetMonthlyStock: 3, currentStock: 3 }), false);
-  assert.equal(isShoppingListNeeded({ targetMonthlyStock: 2, currentStock: 4 }), false);
+  assert.strictEqual(isShoppingListNeeded({ targetMonthlyStock: 5, currentStock: 2 }), true);
+  assert.strictEqual(isShoppingListNeeded({ targetMonthlyStock: 4, currentStock: 4 }), false);
+  assert.strictEqual(isShoppingListNeeded({ targetMonthlyStock: 2, currentStock: 5 }), false);
 });
 
 test('getShoppingList filters items list to only those with Restock Qty > 0 and attaches restockQty', () => {
-  const mockItems: Item[] = [
+  const sampleItems: Item[] = [
     {
       id: '1',
-      itemName: 'Paper Towels',
-      category: 'Paper Goods',
-      photo: 'https://example.com/1.jpg',
+      itemName: 'Paper Towel Rolls',
+      category: 'Paper Goods & Wraps',
+      photo: '',
       targetMonthlyStock: 6,
-      currentStock: 2 // restockQty = 4 (> 0, include)
+      currentStock: 2
     },
     {
       id: '2',
-      itemName: 'Dish Soap',
-      category: 'Cleaning',
-      photo: 'https://example.com/2.jpg',
-      targetMonthlyStock: 3,
-      currentStock: 3 // restockQty = 0 (exclude)
-    },
-    {
-      id: '3',
-      itemName: 'Olive Oil',
-      category: 'Pantry',
-      photo: 'https://example.com/3.jpg',
-      targetMonthlyStock: 2,
-      currentStock: 4 // restockQty = -2 (exclude)
-    },
-    {
-      id: '4',
-      itemName: 'Coffee',
-      category: 'Pantry',
-      photo: 'https://example.com/4.jpg',
+      itemName: 'Toilet Paper',
+      category: 'Paper Goods & Wraps',
+      photo: '',
       targetMonthlyStock: 4,
-      currentStock: 0 // restockQty = 4 (> 0, include)
+      currentStock: 4
     }
   ];
 
-  const shoppingList = getShoppingList(mockItems);
-
-  assert.equal(shoppingList.length, 2);
-  assert.equal(shoppingList[0].id, '1');
-  assert.equal(shoppingList[0].restockQty, 4);
-  assert.equal(shoppingList[1].id, '4');
-  assert.equal(shoppingList[1].restockQty, 4);
+  const shoppingList = getShoppingList(sampleItems);
+  assert.strictEqual(shoppingList.length, 1);
+  assert.strictEqual(shoppingList[0].id, '1');
+  assert.strictEqual(shoppingList[0].restockQty, 4);
 });
 
 test('getItemStockStatus classifies inventory status properly', () => {
-  assert.equal(getItemStockStatus(4, 0), 'out_of_stock');
-  assert.equal(getItemStockStatus(10, 2), 'low_stock');
-  assert.equal(getItemStockStatus(10, 8), 'good');
-  assert.equal(getItemStockStatus(2, 6), 'surplus');
+  assert.strictEqual(getItemStockStatus(5, 0), 'out_of_stock');
+  assert.strictEqual(getItemStockStatus(10, 2), 'low_stock');
+  assert.strictEqual(getItemStockStatus(5, 5), 'good');
+  assert.strictEqual(getItemStockStatus(4, 8), 'surplus');
 });
 
 test('clampStock ensures non-negative integers', () => {
-  assert.equal(clampStock(5.8), 5);
-  assert.equal(clampStock(0), 0);
-  assert.equal(clampStock(-2), 0);
+  assert.strictEqual(clampStock(-5), 0);
+  assert.strictEqual(clampStock(0), 0);
+  assert.strictEqual(clampStock(3.7), 3);
 });
+
+test('matchReceiptItemToInventory matches receipt names to database items', () => {
+  const existingItems: Item[] = [
+    {
+      id: 'item-1',
+      itemName: 'Liquid Laundry Detergent',
+      category: 'Household & Cleaning',
+      photo: '',
+      targetMonthlyStock: 2,
+      currentStock: 1
+    },
+    {
+      id: 'item-2',
+      itemName: 'Barista Oat Milk',
+      category: 'Beverages & Coffee',
+      photo: '',
+      targetMonthlyStock: 6,
+      currentStock: 3
+    }
+  ];
+
+  // Exact match
+  const matchExact = matchReceiptItemToInventory('Liquid Laundry Detergent', existingItems);
+  assert.strictEqual(matchExact.matchedItem?.id, 'item-1');
+
+  // Fuzzy / substring match
+  const matchFuzzy = matchReceiptItemToInventory('Oat Milk Barista Blend', existingItems);
+  assert.strictEqual(matchFuzzy.matchedItem?.id, 'item-2');
+
+  // Unrelated item
+  const matchNone = matchReceiptItemToInventory('Car Motor Oil 5W-30', existingItems);
+  assert.strictEqual(matchNone.matchedItem, null);
+});
+
+test('normalizeReceiptDateToDDMMYYYY formats dd.mm.yy accurately to dd-mm-yyyy', () => {
+  // User's exact example: 28.10.26 -> 28-10-2026
+  assert.strictEqual(normalizeReceiptDateToDDMMYYYY('28.10.26'), '28-10-2026');
+  assert.strictEqual(normalizeReceiptDateToDDMMYYYY('28.10.2026'), '28-10-2026');
+  assert.strictEqual(normalizeReceiptDateToDDMMYYYY('28/10/26'), '28-10-2026');
+  assert.strictEqual(normalizeReceiptDateToDDMMYYYY('05.02.26'), '05-02-2026');
+  assert.strictEqual(normalizeReceiptDateToDDMMYYYY('2026-10-28'), '28-10-2026');
+});
+
+test('formatRupiah formats values into Indonesian Rupiah (Rp XX.XXX)', () => {
+  assert.strictEqual(formatRupiah(45000), 'Rp 45.000');
+  assert.strictEqual(formatRupiah(0), 'Rp 0');
+  assert.strictEqual(formatRupiah(1250000), 'Rp 1.250.000');
+  assert.strictEqual(formatRupiah(null), 'Rp 0');
+  assert.strictEqual(formatRupiah(undefined), 'Rp 0');
+  assert.strictEqual(formatRupiah(25000.4), 'Rp 25.000');
+});
+

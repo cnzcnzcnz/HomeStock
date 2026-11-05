@@ -4,15 +4,19 @@ import { Navbar } from './components/Navbar';
 import { GridView } from './components/GridView';
 import { ItemsTable } from './components/ItemsTable';
 import { ShoppingListView } from './components/ShoppingListView';
+import { ShoppingHistoryView } from './components/ShoppingHistoryView';
+import { ReceiptScannerModal } from './components/ReceiptScannerModal';
 import { ItemModal } from './components/ItemModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { HouseholdModal } from './components/HouseholdModal';
 import { PendingInviteBanner } from './components/PendingInviteBanner';
-import { Item, ViewTab } from './types/inventory';
+import { Item, ViewTab, ShoppingReceiptRecord } from './types/inventory';
 import { Household, HouseholdInvite } from './types/household';
 import {
   loadStoredItems,
   saveStoredItems,
+  loadStoredReceipts,
+  saveStoredReceipts,
   INITIAL_ITEMS,
   getShoppingList,
   calculateRestockQty,
@@ -32,7 +36,10 @@ import {
   acceptHouseholdInvite,
   isUserCloudInitialized,
   markUserCloudInitialized,
-  getLegacyUserItems
+  getLegacyUserItems,
+  saveHouseholdReceipt,
+  deleteHouseholdReceipt,
+  subscribeToHouseholdReceipts
 } from './lib/firebase';
 import { Check, Info, AlertCircle, Cloud, Users, Sparkles } from 'lucide-react';
 
@@ -40,8 +47,10 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [household, setHousehold] = useState<Household | null>(null);
   const [items, setItems] = useState<Item[]>(() => loadStoredItems());
+  const [receipts, setReceipts] = useState<ShoppingReceiptRecord[]>(() => loadStoredReceipts());
   const [currentTab, setCurrentTab] = useState<ViewTab>('grid');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isReceiptScannerOpen, setIsReceiptScannerOpen] = useState(false);
   const [isHouseholdModalOpen, setIsHouseholdModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [deletingItem, setDeletingItem] = useState<Item | null>(null);
@@ -64,6 +73,7 @@ export default function App() {
   useEffect(() => {
     let unsubscribeHousehold: (() => void) | null = null;
     let unsubscribeItems: (() => void) | null = null;
+    let unsubscribeReceipts: (() => void) | null = null;
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
@@ -75,6 +85,10 @@ export default function App() {
       if (unsubscribeItems) {
         unsubscribeItems();
         unsubscribeItems = null;
+      }
+      if (unsubscribeReceipts) {
+        unsubscribeReceipts();
+        unsubscribeReceipts = null;
       }
 
       if (user) {
@@ -118,12 +132,19 @@ export default function App() {
           const activeHousehold = await getOrCreateHousehold(user);
           setHousehold(activeHousehold);
 
-          // 3. Subscribe to real-time updates for household metadata (members list, invite changes)
+          // 3. Subscribe to real-time updates for household metadata
           unsubscribeHousehold = subscribeToHousehold(activeHousehold.id, (updatedHousehold) => {
             setHousehold(updatedHousehold);
           });
 
-          // 4. Subscribe to shared household inventory items
+          // 4. Subscribe to shared household shopping receipts history
+          unsubscribeReceipts = subscribeToHouseholdReceipts(activeHousehold.id, (records) => {
+            if (records.length > 0) {
+              setReceipts(records);
+            }
+          });
+
+          // 5. Subscribe to shared household inventory items
           const alreadyInitialized = await isUserCloudInitialized(user.uid);
 
           unsubscribeItems = subscribeToHouseholdItems(
@@ -173,24 +194,30 @@ export default function App() {
           showToast('Could not load family household. Working offline.', 'warning');
         }
       } else {
-        // User logged out: clear household context and return to local storage
+        // User logged out: clear household context and return to local sandbox storage
         setHousehold(null);
         setPendingInvite(null);
-        setItems(loadStoredItems());
+        setItems(loadStoredItems('sandbox'));
+        setReceipts(loadStoredReceipts('sandbox'));
       }
     });
 
     return () => {
       if (unsubscribeHousehold) unsubscribeHousehold();
       if (unsubscribeItems) unsubscribeItems();
+      if (unsubscribeReceipts) unsubscribeReceipts();
       unsubscribeAuth();
     };
   }, []);
 
-  // Save to localStorage as offline cache
+  // Save to localStorage as offline cache or sandbox
   useEffect(() => {
-    saveStoredItems(items);
-  }, [items]);
+    saveStoredItems(items, currentUser ? 'cloud_cache' : 'sandbox');
+  }, [items, currentUser]);
+
+  useEffect(() => {
+    saveStoredReceipts(receipts, currentUser ? 'cloud_cache' : 'sandbox');
+  }, [receipts, currentUser]);
 
   // Handle Google Login
   const handleGoogleLogin = async () => {
@@ -224,7 +251,6 @@ export default function App() {
       setHousehold(joinedHousehold);
       setPendingInvite(null);
       showToast(`Welcome! You joined ${invite.householdName}`, 'success');
-      // Trigger full page reload to seamlessly bind all listeners to the joined household
       window.location.reload();
     } catch (error: any) {
       console.error('Failed to accept invite', error);
@@ -401,6 +427,56 @@ export default function App() {
     }
   };
 
+  // Handle Receipt Scanner Apply Action (Increment stock in DB and log summary)
+  const handleApplyReceipt = async (
+    receiptRecord: ShoppingReceiptRecord,
+    updatedItems: Item[],
+    newItemsCreated: Item[]
+  ) => {
+    // 1. Update state locally
+    setItems(updatedItems);
+    setReceipts(prev => [receiptRecord, ...prev]);
+
+    // 2. Persist to Firestore if logged in
+    const currentH = householdRef.current;
+    if (currentH && currentUser) {
+      try {
+        // Save the receipt log record
+        await saveHouseholdReceipt(currentH.id, receiptRecord);
+
+        // Update matched items in Firestore
+        for (const it of updatedItems) {
+          await saveHouseholdItem(currentH.id, it, currentUser);
+        }
+      } catch (err) {
+        console.error('Failed to sync receipt stock updates to cloud', err);
+      }
+    }
+
+    const stockedCount = receiptRecord.items.filter(i => i.status !== 'unmatched_skipped').length;
+    showToast(
+      `Receipt from ${receiptRecord.storeName} applied! Updated stock for ${stockedCount} items.`,
+      'success'
+    );
+
+    // Switch view to History tab to see summary ledger
+    setCurrentTab('history');
+  };
+
+  // Delete a receipt log record
+  const handleDeleteReceipt = async (receiptId: string) => {
+    setReceipts(prev => prev.filter(r => r.id !== receiptId));
+    const currentH = householdRef.current;
+    if (currentH) {
+      try {
+        await deleteHouseholdReceipt(currentH.id, receiptId);
+      } catch (e) {
+        console.warn('Error deleting cloud receipt', e);
+      }
+    }
+    showToast('Receipt record deleted from history', 'info');
+  };
+
   const shoppingList = getShoppingList(items);
 
   return (
@@ -411,10 +487,12 @@ export default function App() {
         onTabChange={setCurrentTab}
         shoppingCount={shoppingList.length}
         totalItemsCount={items.length}
+        receiptsCount={receipts.length}
         onOpenAddItem={() => {
           setEditingItem(null);
           setIsModalOpen(true);
         }}
+        onOpenReceiptScanner={() => setIsReceiptScannerOpen(true)}
         onResetSampleData={handleResetSampleData}
         user={currentUser}
         onLogin={handleGoogleLogin}
@@ -441,14 +519,25 @@ export default function App() {
             </span>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setIsHouseholdModalOpen(true)}
-            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-emerald-800 hover:bg-emerald-700 text-white rounded-md text-[11px] font-semibold transition-all border border-emerald-700 shadow-sm"
-          >
-            <Users className="w-3 h-3 text-amber-400" />
-            <span>Manage Family Sharing</span>
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              onClick={() => setIsReceiptScannerOpen(true)}
+              className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-stone-950 rounded-md text-[11px] font-bold transition-all shadow-sm active:scale-95"
+            >
+              <Sparkles className="w-3 h-3 text-stone-950" />
+              <span>Scan Receipt</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsHouseholdModalOpen(true)}
+              className="inline-flex items-center space-x-1 px-2.5 py-1 bg-emerald-800 hover:bg-emerald-700 text-white rounded-md text-[11px] font-semibold transition-all border border-emerald-700 shadow-sm"
+            >
+              <Users className="w-3 h-3 text-amber-400" />
+              <span>Manage Family Sharing</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -508,6 +597,15 @@ export default function App() {
             onNavigateToGrid={() => setCurrentTab('grid')}
           />
         )}
+
+        {currentTab === 'history' && (
+          <ShoppingHistoryView
+            receipts={receipts}
+            onOpenScanner={() => setIsReceiptScannerOpen(true)}
+            onDeleteReceipt={handleDeleteReceipt}
+            onNavigateToTab={setCurrentTab}
+          />
+        )}
       </main>
 
       {/* Add / Edit Item Modal */}
@@ -541,6 +639,15 @@ export default function App() {
         onLoginRequest={handleGoogleLogin}
       />
 
+      {/* AI Receipt Scanner Modal with OpenAI Vision */}
+      <ReceiptScannerModal
+        isOpen={isReceiptScannerOpen}
+        onClose={() => setIsReceiptScannerOpen(false)}
+        existingItems={items}
+        onApplyReceipt={handleApplyReceipt}
+        currentUserName={currentUser?.displayName || currentUser?.email || 'You'}
+      />
+
       {/* Toast Notification */}
       {toast && (
         <div className="fixed bottom-5 right-5 z-50 flex items-center space-x-2 px-4 py-2.5 rounded-xl shadow-lg border text-xs font-semibold animate-in slide-in-from-bottom-2 duration-200 bg-stone-900 text-white border-stone-800">
@@ -555,7 +662,7 @@ export default function App() {
       <footer className="bg-white border-t border-stone-200 py-6 text-center text-xs text-stone-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <div className="flex items-center space-x-2">
-            <span>HomeStock • Household Inventory Management System</span>
+            <span>HomeStock • Household Inventory & Receipt Management</span>
             {household && (
               <span className="hidden sm:inline-flex items-center text-amber-600 font-medium">
                 • {household.name}
@@ -585,6 +692,14 @@ export default function App() {
               className="hover:text-stone-900 transition-colors"
             >
               Shopping List ({shoppingList.length})
+            </button>
+            <span>•</span>
+            <button
+              type="button"
+              onClick={() => setCurrentTab('history')}
+              className="hover:text-stone-900 transition-colors font-medium text-amber-700"
+            >
+              Receipts & History ({receipts.length})
             </button>
           </div>
         </div>

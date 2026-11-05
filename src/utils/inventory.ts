@@ -1,4 +1,4 @@
-import { Item, StockStatus } from '../types/inventory';
+import { Item, StockStatus, ShoppingReceiptRecord } from '../types/inventory';
 
 /**
  * Calculates the math column 'Restock Qty'
@@ -249,18 +249,16 @@ export const INITIAL_ITEMS: Item[] = [
 ];
 
 const STORAGE_KEY = 'homestock_inventory_items_v1';
+const SANDBOX_STORAGE_KEY = 'homestock_sandbox_items_v1';
 const INITIALIZED_KEY = 'homestock_initialized_v1';
 
-export function loadStoredItems(): Item[] {
+export type StorageScope = 'cloud_cache' | 'sandbox';
+
+export function loadStoredItems(scope: StorageScope = 'sandbox'): Item[] {
   if (typeof window === 'undefined') return INITIAL_ITEMS;
+  const key = scope === 'cloud_cache' ? STORAGE_KEY : SANDBOX_STORAGE_KEY;
   try {
-    const isInitialized = localStorage.getItem(INITIALIZED_KEY);
-    if (!isInitialized) {
-      localStorage.setItem(INITIALIZED_KEY, 'true');
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_ITEMS));
-      return INITIAL_ITEMS;
-    }
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(key);
     if (raw !== null) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
@@ -273,11 +271,41 @@ export function loadStoredItems(): Item[] {
   }
 }
 
-export function saveStoredItems(items: Item[]): void {
+export function saveStoredItems(items: Item[], scope: StorageScope = 'sandbox'): void {
   if (typeof window === 'undefined') return;
+  const key = scope === 'cloud_cache' ? STORAGE_KEY : SANDBOX_STORAGE_KEY;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    localStorage.setItem(key, JSON.stringify(items));
   } catch (e) {
     console.error('Failed to save items to localStorage', e);
   }
 }
+
+const RECEIPTS_STORAGE_KEY = 'homestock_shopping_receipts_v1';
+const RECEIPTS_SANDBOX_KEY = 'homestock_sandbox_receipts_v1';
+
+export function loadStoredReceipts(scope: StorageScope = 'sandbox'): ShoppingReceiptRecord[] {
+  if (typeof window === 'undefined') return [];
+  const key = scope === 'cloud_cache' ? RECEIPTS_STORAGE_KEY : RECEIPTS_SANDBOX_KEY;
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveStoredReceipts(receipts: ShoppingReceiptRecord[], scope: StorageScope = 'sandbox'): void {
+  if (typeof window === 'undefined') return;
+  const key = scope === 'cloud_cache' ? RECEIPTS_STORAGE_KEY : RECEIPTS_SANDBOX_KEY;
+  try {
+    localStorage.setItem(key, JSON.stringify(receipts));
+  } catch (e) {
+    console.error('Failed to save receipts to localStorage', e);
+  }
+}
+
