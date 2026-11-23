@@ -1,37 +1,62 @@
 import React, { useState, useEffect } from 'react';
-import { X, Image, Calculator, Sparkles, Check } from 'lucide-react';
-import { Item } from '../types/inventory';
-import { CATEGORIES, PHOTO_PRESETS, calculateRestockQty, clampStock } from '../utils/inventory';
+import { X, Calculator, Check, Home } from 'lucide-react';
+import { HomeDefinition, HomeId, HomeStocks, Item } from '../types/inventory';
+import {
+  CATEGORIES,
+  PHOTO_PRESETS,
+  calculateRestockQty,
+  clampStock,
+  getCentralHome,
+  getNormalizedHomeStocks,
+  getTotalStockFromHomes,
+  normalizeHomesList
+} from '../utils/inventory';
 
 interface ItemModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (itemData: Omit<Item, 'id' | 'updatedAt'>, editId?: string) => void;
+  homes: HomeDefinition[];
   initialItem?: Item | null;
+  defaultHomeId?: HomeId;
 }
 
 export const ItemModal: React.FC<ItemModalProps> = ({
   isOpen,
   onClose,
   onSave,
-  initialItem
+  homes,
+  initialItem,
+  defaultHomeId
 }) => {
+  const normalizedHomes = normalizeHomesList(homes);
+  const centralHome = getCentralHome(normalizedHomes);
+
   const [itemName, setItemName] = useState('');
   const [category, setCategory] = useState<string>(CATEGORIES[0]);
   const [photo, setPhoto] = useState('');
   const [targetMonthlyStock, setTargetMonthlyStock] = useState<number>(4);
-  const [currentStock, setCurrentStock] = useState<number>(1);
+  const [homeId, setHomeId] = useState<HomeId>(centralHome.id);
+  const [homeStocks, setHomeStocks] = useState<HomeStocks>({});
   const [unit, setUnit] = useState('units');
   const [location, setLocation] = useState('');
   const [errors, setErrors] = useState<{ itemName?: string; target?: string; current?: string }>({});
 
   useEffect(() => {
+    const activeHomes = normalizeHomesList(homes);
+    const activeCentralId = getCentralHome(activeHomes).id;
+
     if (initialItem) {
       setItemName(initialItem.itemName);
       setCategory(initialItem.category);
       setPhoto(initialItem.photo);
       setTargetMonthlyStock(initialItem.targetMonthlyStock);
-      setCurrentStock(initialItem.currentStock);
+      const validPrimary =
+        initialItem.homeId && activeHomes.some(h => h.id === initialItem.homeId)
+          ? initialItem.homeId
+          : activeCentralId;
+      setHomeId(validPrimary);
+      setHomeStocks(getNormalizedHomeStocks(initialItem, activeHomes));
       setUnit(initialItem.unit || 'units');
       setLocation(initialItem.location || '');
     } else {
@@ -39,16 +64,33 @@ export const ItemModal: React.FC<ItemModalProps> = ({
       setCategory(CATEGORIES[0]);
       setPhoto(PHOTO_PRESETS[0].url);
       setTargetMonthlyStock(4);
-      setCurrentStock(1);
+      const startHome =
+        defaultHomeId && activeHomes.some(h => h.id === defaultHomeId)
+          ? defaultHomeId
+          : activeCentralId;
+      setHomeId(startHome);
+      const initialStocks: HomeStocks = {};
+      activeHomes.forEach(h => {
+        initialStocks[h.id] = h.id === startHome ? 1 : 0;
+      });
+      setHomeStocks(initialStocks);
       setUnit('units');
       setLocation('Pantry');
     }
     setErrors({});
-  }, [initialItem, isOpen]);
+  }, [initialItem, isOpen, defaultHomeId, homes]);
 
   if (!isOpen) return null;
 
-  const restockQty = calculateRestockQty(targetMonthlyStock, currentStock);
+  const totalCurrentStock = getTotalStockFromHomes(homeStocks);
+  const restockQty = calculateRestockQty(targetMonthlyStock, totalCurrentStock);
+
+  const handleHomeStockChange = (target: HomeId, value: number) => {
+    setHomeStocks(prev => ({
+      ...prev,
+      [target]: clampStock(value)
+    }));
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,14 +104,15 @@ export const ItemModal: React.FC<ItemModalProps> = ({
       newErrors.target = 'Target must be 0 or greater';
     }
 
-    if (currentStock < 0 || isNaN(currentStock)) {
-      newErrors.current = 'Current stock must be 0 or greater';
-    }
-
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
       return;
     }
+
+    const sanitizedStocks: HomeStocks = {};
+    normalizedHomes.forEach(h => {
+      sanitizedStocks[h.id] = clampStock(homeStocks[h.id] ?? 0);
+    });
 
     onSave(
       {
@@ -77,7 +120,9 @@ export const ItemModal: React.FC<ItemModalProps> = ({
         category,
         photo: photo.trim() || PHOTO_PRESETS[0].url,
         targetMonthlyStock: clampStock(targetMonthlyStock),
-        currentStock: clampStock(currentStock),
+        currentStock: getTotalStockFromHomes(sanitizedStocks),
+        homeId,
+        homeStocks: sanitizedStocks,
         unit: unit.trim() || 'units',
         location: location.trim()
       },
@@ -93,7 +138,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
       aria-labelledby="item-modal-title"
       className="fixed inset-0 z-50 overflow-y-auto bg-stone-950/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
     >
-      <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-stone-200 relative overflow-hidden">
+      <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-stone-200 relative overflow-hidden max-h-[92vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-stone-100 mb-5">
           <div>
@@ -101,7 +146,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
               {initialItem ? 'Edit Household Item' : 'Add New Household Item'}
             </h3>
             <p className="text-xs text-stone-500">
-              Configure inventory targets and stock tracking.
+              Configure home categorization, targets, and per-home stock.
             </p>
           </div>
           <button
@@ -138,8 +183,26 @@ export const ItemModal: React.FC<ItemModalProps> = ({
             )}
           </div>
 
-          {/* Category & Unit */}
+          {/* Primary Home & Category */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="homeSelect" className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
+                Primary Home
+              </label>
+              <select
+                id="homeSelect"
+                value={homeId}
+                onChange={(e) => setHomeId(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl bg-stone-50 border border-stone-200 text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+              >
+                {normalizedHomes.map(h => (
+                  <option key={h.id} value={h.id}>
+                    {h.isCentral ? `${h.name} (Central Hub)` : h.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <div>
               <label htmlFor="categorySelect" className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
                 Category
@@ -157,7 +220,10 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                 ))}
               </select>
             </div>
+          </div>
 
+          {/* Unit & Location */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label htmlFor="unitInput" className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
                 Unit / Container
@@ -167,28 +233,27 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                 type="text"
                 value={unit}
                 onChange={(e) => setUnit(e.target.value)}
-                placeholder="e.g. bottles, packs, cans, boxes"
+                placeholder="e.g. bottles, packs, cans"
+                className="w-full px-3 py-2 rounded-xl bg-stone-50 border border-stone-200 text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="locationInput" className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
+                Room / Shelf (Optional)
+              </label>
+              <input
+                id="locationInput"
+                type="text"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                placeholder="e.g. Kitchen Pantry, Under Sink"
                 className="w-full px-3 py-2 rounded-xl bg-stone-50 border border-stone-200 text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
               />
             </div>
           </div>
 
-          {/* Location */}
-          <div>
-            <label htmlFor="locationInput" className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
-              Location (Optional)
-            </label>
-            <input
-              id="locationInput"
-              type="text"
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              placeholder="e.g. Kitchen Pantry, Under Sink, Bathroom Vanity"
-              className="w-full px-3 py-2 rounded-xl bg-stone-50 border border-stone-200 text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
-            />
-          </div>
-
-          {/* Target Monthly Stock & Current Stock */}
+          {/* Target Monthly Stock + Total Current Stock Summary */}
           <div className="grid grid-cols-2 gap-3">
             <div className="bg-stone-50 p-3 rounded-2xl border border-stone-200">
               <label htmlFor="targetStockInput" className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
@@ -208,22 +273,52 @@ export const ItemModal: React.FC<ItemModalProps> = ({
               </span>
             </div>
 
-            <div className="bg-stone-50 p-3 rounded-2xl border border-stone-200">
-              <label htmlFor="currentStockInput" className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
-                Current Stock *
-              </label>
-              <input
-                id="currentStockInput"
-                type="number"
-                min="0"
-                step="1"
-                value={currentStock}
-                onChange={(e) => setCurrentStock(Number(e.target.value))}
-                className="w-full px-3 py-1.5 rounded-lg bg-white border border-stone-300 text-base font-mono font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
-              />
-              <span className="text-[11px] text-stone-500 block mt-1">
-                On-hand inventory right now
+            <div className="bg-stone-50 p-3 rounded-2xl border border-stone-200 flex flex-col justify-between">
+              <span className="block text-xs font-bold uppercase tracking-wider text-stone-700">
+                Total All Homes
               </span>
+              <div className="text-2xl font-mono font-black text-stone-900">
+                {totalCurrentStock}{' '}
+                <span className="text-xs font-sans font-medium text-stone-500">{unit}</span>
+              </div>
+              <span className="text-[11px] text-stone-500 block">
+                Sum across {normalizedHomes.length} home{normalizedHomes.length === 1 ? '' : 's'}
+              </span>
+            </div>
+          </div>
+
+          {/* Per-Home Stock Distribution */}
+          <div className="bg-stone-50 p-3 rounded-2xl border border-stone-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-stone-700 flex items-center space-x-1.5">
+                <Home className="w-3.5 h-3.5 text-amber-600" />
+                <span>Stock by Home</span>
+              </span>
+              <span className="text-[10px] text-stone-500">
+                {centralHome.name} is Central Hub
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {normalizedHomes.map(h => (
+                <div key={h.id}>
+                  <label
+                    htmlFor={`stock-${h.id}`}
+                    className="block text-[10px] font-bold uppercase text-stone-600 mb-1 truncate"
+                    title={h.isCentral ? `${h.name} (Central)` : h.name}
+                  >
+                    {h.isCentral ? `${h.name} (Central)` : h.name}
+                  </label>
+                  <input
+                    id={`stock-${h.id}`}
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={homeStocks[h.id] ?? 0}
+                    onChange={(e) => handleHomeStockChange(h.id, Number(e.target.value))}
+                    className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-stone-300 text-sm font-mono font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+                  />
+                </div>
+              ))}
             </div>
           </div>
 
@@ -232,7 +327,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
             <div className="flex items-center space-x-2 text-stone-700">
               <Calculator className="w-4 h-4 text-amber-600" />
               <span>
-                Calculated <strong>Restock Qty</strong> (Target - Current):
+                Calculated <strong>Restock Qty</strong> (Target - Total):
               </span>
             </div>
             <div className="font-mono font-bold text-sm">
@@ -316,3 +411,4 @@ export const ItemModal: React.FC<ItemModalProps> = ({
     </div>
   );
 };
+

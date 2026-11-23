@@ -1,3 +1,25 @@
+export type HomeId = string;
+
+export type HomeStocks = Record<string, number>;
+
+export interface HomeDefinition {
+  id: HomeId;
+  name: string;
+  isCentral?: boolean;
+}
+
+export interface StockTransferRecord {
+  id: string;
+  itemId: string;
+  itemName: string;
+  fromHomeId: HomeId;
+  toHomeId: HomeId;
+  quantity: number;
+  unit?: string;
+  transferredAt: string;
+  transferredBy?: string;
+}
+
 export interface Item {
   id: string;
   itemName: string;
@@ -5,6 +27,8 @@ export interface Item {
   photo: string;
   targetMonthlyStock: number;
   currentStock: number;
+  homeId?: HomeId;
+  homeStocks?: HomeStocks;
   unit?: string;
   location?: string;
   notes?: string;
@@ -35,6 +59,7 @@ export interface ShoppingReceiptRecord {
   discountAmount: number;
   totalSpent: number;
   currency: string;
+  destinationHomeId?: HomeId;
   receiptImageUrl?: string;
   summaryNotes?: string;
   matchedItemsCount: number;

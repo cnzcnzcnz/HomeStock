@@ -19,7 +19,13 @@ import {
   HelpCircle,
   PackageCheck
 } from 'lucide-react';
-import { Item, ReceiptItemMatched, ShoppingReceiptRecord } from '../types/inventory';
+import { HomeDefinition, HomeId, HomeStocks, Item, ReceiptItemMatched, ShoppingReceiptRecord } from '../types/inventory';
+import {
+  getCentralHome,
+  getNormalizedHomeStocks,
+  getTotalStockFromHomes,
+  normalizeHomesList
+} from '../utils/inventory';
 import {
   getStoredOpenAIApiKey,
   saveStoredOpenAIApiKey,
@@ -36,6 +42,7 @@ interface ReceiptScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   existingItems: Item[];
+  homes: HomeDefinition[];
   onApplyReceipt: (
     receiptRecord: ShoppingReceiptRecord,
     updatedItems: Item[],
@@ -48,9 +55,13 @@ export const ReceiptScannerModal: React.FC<ReceiptScannerModalProps> = ({
   isOpen,
   onClose,
   existingItems,
+  homes,
   onApplyReceipt,
   currentUserName
 }) => {
+  const normalizedHomes = normalizeHomesList(homes);
+  const centralHome = getCentralHome(normalizedHomes);
+
   const [apiKey, setApiKey] = useState(() => getStoredOpenAIApiKey());
   const [selectedModel, setSelectedModel] = useState(() => getStoredOpenAIModel());
   const [showKeySettings, setShowKeySettings] = useState(!getStoredOpenAIApiKey());
@@ -67,6 +78,7 @@ export const ReceiptScannerModal: React.FC<ReceiptScannerModalProps> = ({
   const [editableDate, setEditableDate] = useState('');
   const [editableTotal, setEditableTotal] = useState(0);
   const [editableDiscount, setEditableDiscount] = useState(0);
+  const [destinationHomeId, setDestinationHomeId] = useState<HomeId>(centralHome.id);
 
   // Item matches that the user can verify/edit before applying
   interface ItemReviewRow {
@@ -86,13 +98,15 @@ export const ReceiptScannerModal: React.FC<ReceiptScannerModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       const stored = getStoredOpenAIApiKey();
+      const activeCentral = getCentralHome(normalizeHomesList(homes));
       setApiKey(stored);
       setTempApiKey(stored);
       setSelectedModel(getStoredOpenAIModel());
       setShowKeySettings(!stored);
+      setDestinationHomeId(activeCentral.id);
       setScanError(null);
     }
-  }, [isOpen]);
+  }, [isOpen, homes]);
 
   if (!isOpen) return null;
 
@@ -196,11 +210,18 @@ export const ReceiptScannerModal: React.FC<ReceiptScannerModalProps> = ({
           const itemIdx = updatedExistingItems.findIndex(i => i.id === row.matchedItemId);
           if (itemIdx >= 0) {
             const currentItem = updatedExistingItems[itemIdx];
-            const prevStock = currentItem.currentStock;
-            const newStock = prevStock + row.quantity;
+            const prevHomeStocks = getNormalizedHomeStocks(currentItem, normalizedHomes);
+            const prevStock = getTotalStockFromHomes(prevHomeStocks);
+            const nextHomeStocks = {
+              ...prevHomeStocks,
+              [destinationHomeId]: (prevHomeStocks[destinationHomeId] || 0) + row.quantity
+            };
+            const newStock = getTotalStockFromHomes(nextHomeStocks);
 
             updatedExistingItems[itemIdx] = {
               ...currentItem,
+              homeId: currentItem.homeId || centralHome.id,
+              homeStocks: nextHomeStocks,
               currentStock: newStock,
               updatedAt: new Date().toISOString()
             };
@@ -222,6 +243,10 @@ export const ReceiptScannerModal: React.FC<ReceiptScannerModalProps> = ({
         }
 
         // Action is 'create_new'
+        const newItemHomeStocks: HomeStocks = {};
+        normalizedHomes.forEach(h => {
+          newItemHomeStocks[h.id] = h.id === destinationHomeId ? row.quantity : 0;
+        });
         const newItem: Item = {
           id: `item-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
           itemName: row.receiptName,
@@ -229,6 +254,8 @@ export const ReceiptScannerModal: React.FC<ReceiptScannerModalProps> = ({
           photo: 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=600&auto=format&fit=crop&q=80',
           targetMonthlyStock: Math.max(row.quantity * 2, 2),
           currentStock: row.quantity,
+          homeId: destinationHomeId,
+          homeStocks: newItemHomeStocks,
           unit: 'units',
           location: 'Pantry / Storage',
           notes: `Added from ${editableStore} receipt scan`,
@@ -259,6 +286,7 @@ export const ReceiptScannerModal: React.FC<ReceiptScannerModalProps> = ({
         discountAmount: Number(editableDiscount) || 0,
         totalSpent: Number(editableTotal) || 0,
         currency: parsedResult.currency || 'Rp',
+        destinationHomeId,
         receiptImageUrl: imagePreview || undefined,
         summaryNotes: parsedResult.notes,
         matchedItemsCount: receiptItemsReport.filter(i => i.status !== 'unmatched_skipped').length,
@@ -295,7 +323,7 @@ export const ReceiptScannerModal: React.FC<ReceiptScannerModalProps> = ({
               <h2 id="receipt-modal-title" className="text-lg font-black text-stone-900 tracking-tight flex items-center gap-1.5">
                 <span>AI Receipt Scanner</span>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
-                  {selectedModel === 'gpt-5-nano' ? 'OpenAI GPT-5 Nano' : selectedModel.toUpperCase()}
+                  {selectedModel === 'gpt-4o' ? 'OpenAI GPT-4o' : selectedModel === 'gpt-4o-mini' ? 'OpenAI GPT-4o Mini' : 'OpenAI GPT-5 Nano'}
                 </span>
               </h2>
               <p className="text-xs text-stone-500">
@@ -503,7 +531,7 @@ export const ReceiptScannerModal: React.FC<ReceiptScannerModalProps> = ({
                   </button>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
                   <div>
                     <label className="text-[10px] font-bold uppercase text-stone-500 block mb-1">
                       Store Name
@@ -526,6 +554,22 @@ export const ReceiptScannerModal: React.FC<ReceiptScannerModalProps> = ({
                       placeholder="DD-MM-YYYY (e.g. 28-10-2026)"
                       className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs font-semibold text-stone-900"
                     />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-stone-500 block mb-1">
+                      Receive Into Home
+                    </label>
+                    <select
+                      value={destinationHomeId}
+                      onChange={(e) => setDestinationHomeId(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-white border border-stone-200 rounded-lg text-xs font-semibold text-stone-900"
+                    >
+                      {normalizedHomes.map(h => (
+                        <option key={h.id} value={h.id}>
+                          {h.isCentral ? `${h.name} (Central)` : h.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <label className="text-[10px] font-bold uppercase text-stone-500 block mb-1">
@@ -583,7 +627,7 @@ export const ReceiptScannerModal: React.FC<ReceiptScannerModalProps> = ({
                       >
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                           <div className="flex-1">
-                            <div className="flex items-center space-x-2">
+                            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                               <span className="font-bold text-stone-950 text-xs sm:text-sm">
                                 {row.receiptName}
                               </span>
@@ -591,8 +635,13 @@ export const ReceiptScannerModal: React.FC<ReceiptScannerModalProps> = ({
                                 Qty: {row.quantity}
                               </span>
                               {row.price > 0 && (
-                                <span className="text-stone-500 text-[11px] font-semibold">
-                                  {formatRupiah(row.price)}
+                                <span className="text-stone-600 text-[11px] font-semibold">
+                                  {formatRupiah(row.price)} / unit
+                                  {row.quantity > 1 && (
+                                    <span className="text-stone-400 font-normal ml-1">
+                                      (Total: {formatRupiah(row.price * row.quantity)})
+                                    </span>
+                                  )}
                                 </span>
                               )}
                             </div>

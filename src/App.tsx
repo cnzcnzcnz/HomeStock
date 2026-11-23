@@ -10,17 +10,33 @@ import { ItemModal } from './components/ItemModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { HouseholdModal } from './components/HouseholdModal';
 import { PendingInviteBanner } from './components/PendingInviteBanner';
-import { Item, ViewTab, ShoppingReceiptRecord } from './types/inventory';
+import { PickFromHomeModal } from './components/PickFromHomeModal';
+import { ManageHomesModal } from './components/ManageHomesModal';
+import { HomeDefinition, HomeId, Item, ViewTab, ShoppingReceiptRecord, StockTransferRecord } from './types/inventory';
 import { Household, HouseholdInvite } from './types/household';
 import {
   loadStoredItems,
   saveStoredItems,
   loadStoredReceipts,
   saveStoredReceipts,
+  loadStoredTransfers,
+  saveStoredTransfers,
+  loadStoredHomes,
+  saveStoredHomes,
   INITIAL_ITEMS,
   getShoppingList,
   calculateRestockQty,
-  clampStock
+  adjustItemStockForHome,
+  transferStockBetweenHomes,
+  restockItemToTargetInHome,
+  getHomeLabel,
+  getCentralHome,
+  normalizeHomesList,
+  createHomeDefinition,
+  renameHomeInList,
+  setCentralHomeInList,
+  removeHomeFromList,
+  normalizeItemHomes
 } from './utils/inventory';
 import {
   auth,
@@ -28,6 +44,7 @@ import {
   logoutUser,
   getOrCreateHousehold,
   subscribeToHousehold,
+  updateHouseholdHomes,
   subscribeToHouseholdItems,
   saveHouseholdItem,
   deleteHouseholdItem,
@@ -39,19 +56,28 @@ import {
   getLegacyUserItems,
   saveHouseholdReceipt,
   deleteHouseholdReceipt,
-  subscribeToHouseholdReceipts
+  subscribeToHouseholdReceipts,
+  saveHouseholdTransfer,
+  subscribeToHouseholdTransfers
 } from './lib/firebase';
 import { Check, Info, AlertCircle, Cloud, Users, Sparkles } from 'lucide-react';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [household, setHousehold] = useState<Household | null>(null);
-  const [items, setItems] = useState<Item[]>(() => loadStoredItems());
-  const [receipts, setReceipts] = useState<ShoppingReceiptRecord[]>(() => loadStoredReceipts());
+  const [homes, setHomes] = useState<HomeDefinition[]>(() => loadStoredHomes('sandbox'));
+  const [items, setItems] = useState<Item[]>(() => loadStoredItems('sandbox'));
+  const [receipts, setReceipts] = useState<ShoppingReceiptRecord[]>(() => loadStoredReceipts('sandbox'));
+  const [transfers, setTransfers] = useState<StockTransferRecord[]>(() => loadStoredTransfers('sandbox'));
+  const [selectedHome, setSelectedHome] = useState<HomeId | 'all'>('all');
   const [currentTab, setCurrentTab] = useState<ViewTab>('grid');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isReceiptScannerOpen, setIsReceiptScannerOpen] = useState(false);
   const [isHouseholdModalOpen, setIsHouseholdModalOpen] = useState(false);
+  const [isManageHomesOpen, setIsManageHomesOpen] = useState(false);
+  const [isPickModalOpen, setIsPickModalOpen] = useState(false);
+  const [pickTargetHome, setPickTargetHome] = useState<HomeId>('home-2');
+  const [pickItemTarget, setPickItemTarget] = useState<Item | null>(null);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [deletingItem, setDeletingItem] = useState<Item | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -61,6 +87,8 @@ export default function App() {
 
   const householdRef = useRef<Household | null>(null);
   householdRef.current = household;
+  const homesRef = useRef<HomeDefinition[]>(homes);
+  homesRef.current = homes;
 
   const showToast = (message: string, type: 'success' | 'info' | 'warning' = 'info') => {
     setToast({ message, type });
@@ -74,6 +102,7 @@ export default function App() {
     let unsubscribeHousehold: (() => void) | null = null;
     let unsubscribeItems: (() => void) | null = null;
     let unsubscribeReceipts: (() => void) | null = null;
+    let unsubscribeTransfers: (() => void) | null = null;
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
@@ -89,6 +118,10 @@ export default function App() {
       if (unsubscribeReceipts) {
         unsubscribeReceipts();
         unsubscribeReceipts = null;
+      }
+      if (unsubscribeTransfers) {
+        unsubscribeTransfers();
+        unsubscribeTransfers = null;
       }
 
       if (user) {
@@ -131,16 +164,28 @@ export default function App() {
           // 2. Load or create the user's primary/active household
           const activeHousehold = await getOrCreateHousehold(user);
           setHousehold(activeHousehold);
+          if (activeHousehold.homes && activeHousehold.homes.length > 0) {
+            setHomes(normalizeHomesList(activeHousehold.homes));
+          }
 
           // 3. Subscribe to real-time updates for household metadata
           unsubscribeHousehold = subscribeToHousehold(activeHousehold.id, (updatedHousehold) => {
             setHousehold(updatedHousehold);
+            if (updatedHousehold.homes && updatedHousehold.homes.length > 0) {
+              setHomes(normalizeHomesList(updatedHousehold.homes));
+            }
           });
 
-          // 4. Subscribe to shared household shopping receipts history
+          // 4. Subscribe to shared household shopping receipts & transfers history
           unsubscribeReceipts = subscribeToHouseholdReceipts(activeHousehold.id, (records) => {
             if (records.length > 0) {
               setReceipts(records);
+            }
+          });
+
+          unsubscribeTransfers = subscribeToHouseholdTransfers(activeHousehold.id, (records) => {
+            if (records.length > 0) {
+              setTransfers(records);
             }
           });
 
@@ -197,8 +242,11 @@ export default function App() {
         // User logged out: clear household context and return to local sandbox storage
         setHousehold(null);
         setPendingInvite(null);
+        setHomes(loadStoredHomes('sandbox'));
         setItems(loadStoredItems('sandbox'));
         setReceipts(loadStoredReceipts('sandbox'));
+        setTransfers(loadStoredTransfers('sandbox'));
+        setSelectedHome('all');
       }
     });
 
@@ -206,11 +254,16 @@ export default function App() {
       if (unsubscribeHousehold) unsubscribeHousehold();
       if (unsubscribeItems) unsubscribeItems();
       if (unsubscribeReceipts) unsubscribeReceipts();
+      if (unsubscribeTransfers) unsubscribeTransfers();
       unsubscribeAuth();
     };
   }, []);
 
   // Save to localStorage as offline cache or sandbox
+  useEffect(() => {
+    saveStoredHomes(homes, currentUser ? 'cloud_cache' : 'sandbox');
+  }, [homes, currentUser]);
+
   useEffect(() => {
     saveStoredItems(items, currentUser ? 'cloud_cache' : 'sandbox');
   }, [items, currentUser]);
@@ -218,6 +271,10 @@ export default function App() {
   useEffect(() => {
     saveStoredReceipts(receipts, currentUser ? 'cloud_cache' : 'sandbox');
   }, [receipts, currentUser]);
+
+  useEffect(() => {
+    saveStoredTransfers(transfers, currentUser ? 'cloud_cache' : 'sandbox');
+  }, [transfers, currentUser]);
 
   // Handle Google Login
   const handleGoogleLogin = async () => {
@@ -260,15 +317,160 @@ export default function App() {
     }
   };
 
+  const normalizedHomes = normalizeHomesList(homes);
+  const centralHome = getCentralHome(normalizedHomes);
+  const branchHomes = normalizedHomes.filter(h => h.id !== centralHome.id);
+
+  // Dynamic Home Management Handlers
+  const handleRenameHome = async (homeId: HomeId, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    const nextHomes = renameHomeInList(normalizedHomes, homeId, trimmed);
+    setHomes(nextHomes);
+
+    const currentH = householdRef.current;
+    if (currentH && currentUser) {
+      try {
+        await updateHouseholdHomes(currentH.id, nextHomes);
+      } catch (e) {
+        console.error('Failed to sync renamed home to cloud', e);
+      }
+    }
+    showToast(`Renamed home to "${trimmed}"`, 'success');
+  };
+
+  const handleAddHome = async (name: string) => {
+    const newHome = createHomeDefinition(name, normalizedHomes);
+    const nextHomes = [...normalizedHomes, newHome];
+    const nextItems = items.map(it => normalizeItemHomes(it, nextHomes));
+    setHomes(nextHomes);
+    setItems(nextItems);
+
+    const currentH = householdRef.current;
+    if (currentH && currentUser) {
+      try {
+        await updateHouseholdHomes(currentH.id, nextHomes);
+      } catch (e) {
+        console.error('Failed to sync new home to cloud', e);
+      }
+    }
+    showToast(`Added "${newHome.name}"`, 'success');
+  };
+
+  const handleSetCentralHome = async (homeId: HomeId) => {
+    const nextHomes = setCentralHomeInList(normalizedHomes, homeId);
+    setHomes(nextHomes);
+
+    const currentH = householdRef.current;
+    if (currentH && currentUser) {
+      try {
+        await updateHouseholdHomes(currentH.id, nextHomes);
+      } catch (e) {
+        console.error('Failed to update Central Hub in cloud', e);
+      }
+    }
+    showToast(`"${getHomeLabel(homeId, false, nextHomes)}" is now your Central Hub`, 'success');
+  };
+
+  const handleRemoveHome = async (homeId: HomeId) => {
+    const removedLabel = getHomeLabel(homeId, false, normalizedHomes);
+    const { homes: nextHomes, items: nextItems } = removeHomeFromList(
+      normalizedHomes,
+      homeId,
+      items
+    );
+    setHomes(nextHomes);
+    setItems(nextItems);
+    if (selectedHome === homeId) {
+      setSelectedHome('all');
+    }
+
+    const currentH = householdRef.current;
+    if (currentH && currentUser) {
+      try {
+        await updateHouseholdHomes(currentH.id, nextHomes);
+        await seedHouseholdItems(currentH.id, nextItems, currentUser);
+      } catch (e) {
+        console.error('Failed to sync removed home to cloud', e);
+      }
+    }
+    const nextCentral = getCentralHome(nextHomes);
+    showToast(
+      `Removed "${removedLabel}" (any remaining stock returned to ${nextCentral.name})`,
+      'info'
+    );
+  };
+
+  const openPickModal = (targetHome?: HomeId, item?: Item) => {
+    const fallbackBranch =
+      selectedHome !== 'all' && selectedHome !== centralHome.id
+        ? selectedHome
+        : branchHomes[0]?.id || centralHome.id;
+    setPickTargetHome(targetHome || fallbackBranch);
+    setPickItemTarget(item || null);
+    setIsPickModalOpen(true);
+  };
+
+  // Pick / transfer units from Central Home to any branch home
+  const handlePickFromCentral = async (
+    itemId: string,
+    toHomeId: HomeId,
+    quantity: number
+  ) => {
+    const targetItem = items.find(i => i.id === itemId);
+    if (!targetItem) return;
+
+    const { updatedItem, transferredQty } = transferStockBetweenHomes(
+      targetItem,
+      centralHome.id,
+      toHomeId,
+      quantity,
+      normalizedHomes
+    );
+    if (transferredQty <= 0) {
+      showToast(`No stock available in ${centralHome.name} to pick.`, 'warning');
+      return;
+    }
+
+    const updatedItemsList = items.map(i => (i.id === itemId ? updatedItem : i));
+    setItems(updatedItemsList);
+
+    const transferRecord: StockTransferRecord = {
+      id: `transfer-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      itemId: updatedItem.id,
+      itemName: updatedItem.itemName,
+      fromHomeId: centralHome.id,
+      toHomeId,
+      quantity: transferredQty,
+      unit: updatedItem.unit || 'units',
+      transferredAt: new Date().toISOString(),
+      transferredBy: currentUser?.displayName || currentUser?.email || 'Family Member'
+    };
+    setTransfers(prev => [transferRecord, ...prev]);
+
+    const currentH = householdRef.current;
+    if (currentH && currentUser) {
+      try {
+        await saveHouseholdItem(currentH.id, updatedItem, currentUser);
+        await saveHouseholdTransfer(currentH.id, transferRecord);
+      } catch (e) {
+        console.error('Failed to sync home transfer to cloud', e);
+      }
+    }
+
+    showToast(
+      `Picked ${transferredQty} ${updatedItem.unit || 'units'} of "${updatedItem.itemName}" from ${centralHome.name} → ${getHomeLabel(toHomeId, false, normalizedHomes)}`,
+      'success'
+    );
+  };
+
   // Stock increment '+'
   const handleIncrement = async (id: string) => {
     const updated = items.map(item => {
       if (item.id === id) {
-        return {
-          ...item,
-          currentStock: item.currentStock + 1,
-          updatedAt: new Date().toISOString()
-        };
+        const targetHome: HomeId =
+          selectedHome === 'all' ? item.homeId || centralHome.id : selectedHome;
+        return adjustItemStockForHome(item, targetHome, 1, normalizedHomes);
       }
       return item;
     });
@@ -292,11 +494,9 @@ export default function App() {
   const handleDecrement = async (id: string) => {
     const updated = items.map(item => {
       if (item.id === id) {
-        return {
-          ...item,
-          currentStock: clampStock(item.currentStock - 1),
-          updatedAt: new Date().toISOString()
-        };
+        const targetHome: HomeId =
+          selectedHome === 'all' ? item.homeId || centralHome.id : selectedHome;
+        return adjustItemStockForHome(item, targetHome, -1, normalizedHomes);
       }
       return item;
     });
@@ -316,15 +516,11 @@ export default function App() {
     }
   };
 
-  // Restock single item to target monthly stock
+  // Restock single item to target monthly stock (adds needed units into Central Home)
   const handleRestockItem = async (id: string, targetMonthlyStock: number) => {
     const updated = items.map(item => {
       if (item.id === id) {
-        return {
-          ...item,
-          currentStock: targetMonthlyStock,
-          updatedAt: new Date().toISOString()
-        };
+        return restockItemToTargetInHome(item, targetMonthlyStock, centralHome.id, normalizedHomes);
       }
       return item;
     });
@@ -342,19 +538,15 @@ export default function App() {
         }
       }
     }
-    showToast('Restocked item to monthly target quota!', 'success');
+    showToast(`Restocked item at ${centralHome.name} (Central) to monthly target!`, 'success');
   };
 
-  // Restock all items on the shopping list
+  // Restock all items on the shopping list into Central Home
   const handleRestockAll = async () => {
     const updated = items.map(item => {
       const restock = calculateRestockQty(item.targetMonthlyStock, item.currentStock);
       if (restock > 0) {
-        return {
-          ...item,
-          currentStock: item.targetMonthlyStock,
-          updatedAt: new Date().toISOString()
-        };
+        return restockItemToTargetInHome(item, item.targetMonthlyStock, centralHome.id, normalizedHomes);
       }
       return item;
     });
@@ -369,29 +561,35 @@ export default function App() {
         console.error(e);
       }
     }
-    showToast('All shopping list items restocked to target!', 'success');
+    showToast(`All shopping list items restocked at ${centralHome.name} (Central)!`, 'success');
   };
 
   // Save (add or edit) item
   const handleSaveItem = async (itemData: Omit<Item, 'id' | 'updatedAt'>, editId?: string) => {
     const currentH = householdRef.current;
     if (editId) {
-      const updatedItem: Item = {
-        ...itemData,
-        id: editId,
-        updatedAt: new Date().toISOString()
-      };
+      const updatedItem: Item = normalizeItemHomes(
+        {
+          ...itemData,
+          id: editId,
+          updatedAt: new Date().toISOString()
+        },
+        normalizedHomes
+      );
       setItems(prev => prev.map(i => (i.id === editId ? updatedItem : i)));
       if (currentH && currentUser) {
         await saveHouseholdItem(currentH.id, updatedItem, currentUser);
       }
       showToast(`Updated "${itemData.itemName}"`, 'success');
     } else {
-      const newItem: Item = {
-        ...itemData,
-        id: `item-${Date.now()}`,
-        updatedAt: new Date().toISOString()
-      };
+      const newItem: Item = normalizeItemHomes(
+        {
+          ...itemData,
+          id: `item-${Date.now()}`,
+          updatedAt: new Date().toISOString()
+        },
+        normalizedHomes
+      );
       setItems(prev => [newItem, ...prev]);
       if (currentH && currentUser) {
         await saveHouseholdItem(currentH.id, newItem, currentUser);
@@ -556,6 +754,9 @@ export default function App() {
         {currentTab === 'grid' && (
           <GridView
             items={items}
+            homes={normalizedHomes}
+            selectedHome={selectedHome}
+            onSelectHome={setSelectedHome}
             onIncrement={handleIncrement}
             onDecrement={handleDecrement}
             onEdit={(item) => {
@@ -568,12 +769,17 @@ export default function App() {
               setIsModalOpen(true);
             }}
             onSwitchToShoppingList={() => setCurrentTab('shopping')}
+            onOpenPickModal={openPickModal}
+            onOpenManageHomes={() => setIsManageHomesOpen(true)}
           />
         )}
 
         {currentTab === 'table' && (
           <ItemsTable
             items={items}
+            homes={normalizedHomes}
+            selectedHome={selectedHome}
+            onSelectHome={setSelectedHome}
             onIncrement={handleIncrement}
             onDecrement={handleDecrement}
             onEdit={(item) => {
@@ -585,12 +791,15 @@ export default function App() {
               setEditingItem(null);
               setIsModalOpen(true);
             }}
+            onOpenPickModal={openPickModal}
+            onOpenManageHomes={() => setIsManageHomesOpen(true)}
           />
         )}
 
         {currentTab === 'shopping' && (
           <ShoppingListView
             items={items}
+            homes={normalizedHomes}
             onRestockItem={handleRestockItem}
             onIncrementStock={handleIncrement}
             onRestockAll={handleRestockAll}
@@ -601,6 +810,8 @@ export default function App() {
         {currentTab === 'history' && (
           <ShoppingHistoryView
             receipts={receipts}
+            transfers={transfers}
+            homes={normalizedHomes}
             onOpenScanner={() => setIsReceiptScannerOpen(true)}
             onDeleteReceipt={handleDeleteReceipt}
             onNavigateToTab={setCurrentTab}
@@ -616,7 +827,35 @@ export default function App() {
           setEditingItem(null);
         }}
         onSave={handleSaveItem}
+        homes={normalizedHomes}
         initialItem={editingItem}
+        defaultHomeId={selectedHome === 'all' ? centralHome.id : selectedHome}
+      />
+
+      {/* Pick Stock From Central Home Modal */}
+      <PickFromHomeModal
+        isOpen={isPickModalOpen}
+        onClose={() => {
+          setIsPickModalOpen(false);
+          setPickItemTarget(null);
+        }}
+        homes={normalizedHomes}
+        items={items}
+        initialTargetHome={pickTargetHome}
+        initialItemId={pickItemTarget?.id || null}
+        onPickFromCentral={handlePickFromCentral}
+      />
+
+      {/* Manage & Rename Homes Modal */}
+      <ManageHomesModal
+        isOpen={isManageHomesOpen}
+        onClose={() => setIsManageHomesOpen(false)}
+        homes={normalizedHomes}
+        items={items}
+        onRenameHome={handleRenameHome}
+        onAddHome={handleAddHome}
+        onSetCentralHome={handleSetCentralHome}
+        onRemoveHome={handleRemoveHome}
       />
 
       {/* Delete Confirmation Modal */}
@@ -644,6 +883,7 @@ export default function App() {
         isOpen={isReceiptScannerOpen}
         onClose={() => setIsReceiptScannerOpen(false)}
         existingItems={items}
+        homes={normalizedHomes}
         onApplyReceipt={handleApplyReceipt}
         currentUserName={currentUser?.displayName || currentUser?.email || 'You'}
       />
@@ -662,7 +902,7 @@ export default function App() {
       <footer className="bg-white border-t border-stone-200 py-6 text-center text-xs text-stone-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <div className="flex items-center space-x-2">
-            <span>HomeStock • Household Inventory & Receipt Management</span>
+            <span>Stoku! • Household Inventory & Receipt Management</span>
             {household && (
               <span className="hidden sm:inline-flex items-center text-amber-600 font-medium">
                 • {household.name}

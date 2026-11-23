@@ -1,3 +1,5 @@
+import { HomeDefinition } from './inventory';
+
 export interface HouseholdMember {
   uid: string;
   email: string;
@@ -26,6 +28,7 @@ export interface Household {
   memberUids: string[];
   memberEmails: string[];
   members: HouseholdMember[];
+  homes?: HomeDefinition[];
   createdAt: string;
   inviteCode: string;
 }

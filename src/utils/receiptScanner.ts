@@ -5,9 +5,9 @@ const OPENAI_STORAGE_KEY = 'homestock_openai_api_key_v1';
 const OPENAI_MODEL_KEY = 'homestock_openai_model_v1';
 
 export const SUPPORTED_MODELS = [
-  { id: 'gpt-5-nano', name: 'GPT-5 Nano (Ultra-fast & economical)' },
-  { id: 'gpt-4o-mini', name: 'GPT-4o Mini (Compact & responsive)' },
-  { id: 'gpt-4o', name: 'GPT-4o (High precision)' }
+  { id: 'gpt-4o', name: 'GPT-4o (High precision & recommended)' },
+  { id: 'gpt-4o-mini', name: 'GPT-4o Mini (Compact & fast)' },
+  { id: 'gpt-5-nano', name: 'GPT-5 Nano (Ultra-fast & economical)' }
 ];
 
 export function getStoredOpenAIApiKey(): string {
@@ -28,8 +28,8 @@ export function saveStoredOpenAIApiKey(key: string): void {
 }
 
 export function getStoredOpenAIModel(): string {
-  if (typeof window === 'undefined') return 'gpt-5-nano';
-  return localStorage.getItem(OPENAI_MODEL_KEY) || 'gpt-5-nano';
+  if (typeof window === 'undefined') return 'gpt-4o';
+  return localStorage.getItem(OPENAI_MODEL_KEY) || 'gpt-4o';
 }
 
 export function saveStoredOpenAIModel(modelId: string): void {
@@ -130,7 +130,7 @@ export async function parseReceiptWithOpenAI(
   imageBase64: string,
   apiKey: string,
   existingItems: Item[],
-  preferredModel: string = 'gpt-5-nano'
+  preferredModel: string = 'gpt-4o'
 ): Promise<ReceiptScanResult> {
   if (!apiKey || !apiKey.trim()) {
     throw new Error('Please enter your OpenAI API key in the Receipt Scanner settings.');
@@ -163,6 +163,20 @@ Your job is to read images of shopping receipts and output strictly valid JSON m
   ]
 }
 
+CRITICAL ITEM QUANTITY & UNIT PRICE INSTRUCTIONS:
+1. QUANTITY MUST BE THE ACTUAL NUMBER OF PIECES/UNITS PURCHASED:
+   - Carefully look for quantity multipliers such as "2 x 15.000", "3 PCS @ 12.000", or "Qty: 4". In those cases, quantity is 2, 3, 4!
+   - DO NOT confuse packaging volume/weight (e.g. "85g", "160ml", "200ml", "1000ml", "1kg", "12-pack") or barcode/SKU numbers with purchase quantity.
+   - Example: "INDOMIE GORENG 85G / 5 x 3.100 = 15.500" -> quantity is 5, NOT 85!
+   - If an item appears as a single line without multiplier, quantity is 1.
+
+2. PRICE MUST BE THE INDIVIDUAL UNIT PRICE PER SINGLE PIECE:
+   - When a receipt shows "QTY x UNIT_PRICE = TOTAL" (e.g. "2 x 15.000 = 30.000"):
+     - quantity = 2
+     - price = 15000 (the single unit price, NOT the 30.000 subtotal)
+   - If only line total is printed for multiple items, divide total by quantity to get the single unit price.
+   - All prices, discounts, and totals are whole integer numbers in Indonesian Rupiah (Rp).
+
 CRITICAL CURRENCY INSTRUCTIONS (INDONESIAN RUPIAH):
 1. Currency is strictly Indonesian Rupiah (IDR / Rp).
 2. Indonesian receipts use dots/periods as THOUSAND separators (e.g. '25.000' means 25000 Rupiah, NOT 25.00; '150.000' means 150000 Rupiah).
@@ -183,8 +197,8 @@ CRITICAL DATE FORMAT INSTRUCTIONS:
     ? imageBase64
     : `data:image/jpeg;base64,${imageBase64}`;
 
-  // Models to attempt: user's preferred model (default gpt-5-nano), then fallback to gpt-4o-mini, then gpt-4o
-  const modelsToTry = Array.from(new Set([preferredModel, 'gpt-5-nano', 'gpt-4o-mini', 'gpt-4o']));
+  // Models to attempt: user's preferred model (default gpt-4o), then fallback to gpt-4o-mini, then gpt-5-nano
+  const modelsToTry = Array.from(new Set([preferredModel, 'gpt-4o', 'gpt-4o-mini', 'gpt-5-nano']));
 
   let lastError: any = null;
   let rawText = '';

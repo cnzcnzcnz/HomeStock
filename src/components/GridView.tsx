@@ -1,39 +1,77 @@
 import React, { useMemo, useState } from 'react';
-import { Search, Filter, AlertTriangle, CheckCircle, PackageOpen, Plus, Sparkles } from 'lucide-react';
-import { Item } from '../types/inventory';
+import {
+  Search,
+  Filter,
+  AlertTriangle,
+  CheckCircle,
+  PackageOpen,
+  Plus,
+  ArrowRightLeft
+} from 'lucide-react';
+import { HomeDefinition, HomeId, Item } from '../types/inventory';
 import { ItemCard } from './ItemCard';
-import { calculateRestockQty, CATEGORIES } from '../utils/inventory';
+import { HomeFilterBar } from './HomeFilterBar';
+import {
+  calculateRestockQty,
+  CATEGORIES,
+  filterItemsByHome,
+  getCentralHome,
+  getHomeLabel,
+  normalizeHomesList
+} from '../utils/inventory';
 
 interface GridViewProps {
   items: Item[];
+  homes: HomeDefinition[];
+  selectedHome: HomeId | 'all';
+  onSelectHome: (home: HomeId | 'all') => void;
   onIncrement: (id: string) => void;
   onDecrement: (id: string) => void;
   onEdit: (item: Item) => void;
   onDelete: (item: Item) => void;
   onOpenAddItem: () => void;
   onSwitchToShoppingList: () => void;
+  onOpenPickModal: (targetHome?: HomeId, item?: Item) => void;
+  onOpenManageHomes: () => void;
 }
 
 export const GridView: React.FC<GridViewProps> = ({
   items,
+  homes,
+  selectedHome,
+  onSelectHome,
   onIncrement,
   onDecrement,
   onEdit,
   onDelete,
   onOpenAddItem,
-  onSwitchToShoppingList
+  onSwitchToShoppingList,
+  onOpenPickModal,
+  onOpenManageHomes
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [stockFilter, setStockFilter] = useState<'all' | 'needs_restock' | 'stocked'>('all');
 
-  // Compute overall inventory metrics
+  const normalizedHomes = useMemo(() => normalizeHomesList(homes), [homes]);
+  const centralHome = useMemo(() => getCentralHome(normalizedHomes), [normalizedHomes]);
+  const branchHomes = useMemo(
+    () => normalizedHomes.filter(h => h.id !== centralHome.id),
+    [normalizedHomes, centralHome]
+  );
+
+  // Filter first by selected Home
+  const homeScopedItems = useMemo(() => {
+    return filterItemsByHome(items, selectedHome, normalizedHomes);
+  }, [items, selectedHome, normalizedHomes]);
+
+  // Compute inventory metrics for current home scope
   const metrics = useMemo(() => {
     let outOfStockCount = 0;
     let needsRestockCount = 0;
     let totalRestockUnits = 0;
 
-    items.forEach(item => {
+    homeScopedItems.forEach(item => {
       const restock = calculateRestockQty(item.targetMonthlyStock, item.currentStock);
       if (item.currentStock <= 0) outOfStockCount++;
       if (restock > 0) {
@@ -43,26 +81,23 @@ export const GridView: React.FC<GridViewProps> = ({
     });
 
     return {
-      total: items.length,
+      total: homeScopedItems.length,
       needsRestock: needsRestockCount,
       outOfStock: outOfStockCount,
       totalRestockUnits
     };
-  }, [items]);
+  }, [homeScopedItems]);
 
-  // Filter items
+  // Filter items by search, category, and stock status
   const filteredItems = useMemo(() => {
-    return items.filter(item => {
-      // Search
+    return homeScopedItems.filter(item => {
       const matchesSearch =
         item.itemName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
         (item.location && item.location.toLowerCase().includes(searchTerm.toLowerCase()));
 
-      // Category
       const matchesCategory = selectedCategory === 'all' || item.category === selectedCategory;
 
-      // Stock status
       const restock = calculateRestockQty(item.targetMonthlyStock, item.currentStock);
       let matchesStock = true;
       if (stockFilter === 'needs_restock') {
@@ -73,17 +108,34 @@ export const GridView: React.FC<GridViewProps> = ({
 
       return matchesSearch && matchesCategory && matchesStock;
     });
-  }, [items, searchTerm, selectedCategory, stockFilter]);
+  }, [homeScopedItems, searchTerm, selectedCategory, stockFilter]);
+
+  const isBranchHomeSelected = selectedHome !== 'all' && selectedHome !== centralHome.id;
+  const activeHomeShortName =
+    selectedHome === 'all' ? 'All Homes' : getHomeLabel(selectedHome, false, normalizedHomes);
+  const defaultPickTarget = isBranchHomeSelected ? selectedHome : branchHomes[0]?.id;
 
   return (
     <div className="space-y-6">
+      {/* Multi-Home Category & Central Hub Filter Bar */}
+      <HomeFilterBar
+        homes={normalizedHomes}
+        items={items}
+        selectedHome={selectedHome}
+        onSelectHome={onSelectHome}
+        onOpenPickModal={(target) => onOpenPickModal(target)}
+        onOpenManageHomes={onOpenManageHomes}
+      />
+
       {/* Top Banner & Quick Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {/* Total Items */}
         <div className="bg-white p-4 rounded-2xl border border-stone-200/90 shadow-sm flex items-center justify-between">
           <div>
             <span className="text-xs font-semibold uppercase tracking-wider text-stone-500">
-              Total Household Items
+              {selectedHome === 'all'
+                ? 'Total Household Items'
+                : `${getHomeLabel(selectedHome, true, normalizedHomes)} Items`}
             </span>
             <div className="text-2xl font-black text-stone-900 mt-0.5">
               {metrics.total}
@@ -237,25 +289,34 @@ export const GridView: React.FC<GridViewProps> = ({
             <ItemCard
               key={item.id}
               item={item}
+              homes={normalizedHomes}
+              activeHome={selectedHome}
               onIncrement={onIncrement}
               onDecrement={onDecrement}
               onEdit={onEdit}
               onDelete={onDelete}
+              onOpenPickForItem={(targetItem) =>
+                onOpenPickModal(defaultPickTarget, targetItem)
+              }
             />
           ))}
         </div>
       ) : (
-        <div className="bg-white rounded-2xl border border-stone-200 p-12 text-center max-w-md mx-auto my-8">
+        <div className="bg-white rounded-2xl border border-stone-200 p-10 text-center max-w-lg mx-auto my-8">
           <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-3">
             <PackageOpen className="w-6 h-6" />
           </div>
           <h3 className="font-bold text-stone-800 text-base mb-1">
-            No items found
+            {isBranchHomeSelected
+              ? `No stock in ${activeHomeShortName} yet`
+              : 'No items found'}
           </h3>
-          <p className="text-xs text-stone-500 mb-4">
-            Try adjusting your search terms or filters to find what you need.
+          <p className="text-xs text-stone-500 mb-5">
+            {isBranchHomeSelected
+              ? `Pick items directly from ${centralHome.name} Central Stock or add a new item specifically for this home.`
+              : 'Try adjusting your search terms or filters to find what you need.'}
           </p>
-          <div className="flex justify-center gap-2">
+          <div className="flex flex-wrap justify-center gap-2">
             {(searchTerm || selectedCategory !== 'all' || stockFilter !== 'all') && (
               <button
                 type="button"
@@ -267,6 +328,16 @@ export const GridView: React.FC<GridViewProps> = ({
                 className="px-4 py-2 text-xs font-semibold rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-700 transition-colors"
               >
                 Clear Filters
+              </button>
+            )}
+            {isBranchHomeSelected && branchHomes.length > 0 && (
+              <button
+                type="button"
+                onClick={() => onOpenPickModal(selectedHome)}
+                className="px-4 py-2 text-xs font-bold rounded-lg bg-stone-900 hover:bg-stone-800 text-white transition-colors flex items-center space-x-1.5"
+              >
+                <ArrowRightLeft className="w-3.5 h-3.5 text-amber-400" />
+                <span>Pick from {centralHome.name}</span>
               </button>
             )}
             <button
@@ -283,3 +354,4 @@ export const GridView: React.FC<GridViewProps> = ({
     </div>
   );
 };
+

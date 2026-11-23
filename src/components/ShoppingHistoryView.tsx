@@ -14,13 +14,18 @@ import {
   Sparkles,
   ExternalLink,
   Search,
-  ArrowRight
+  ArrowRight,
+  ArrowRightLeft,
+  Home
 } from 'lucide-react';
-import { ShoppingReceiptRecord, ViewTab } from '../types/inventory';
+import { HomeDefinition, ShoppingReceiptRecord, StockTransferRecord, ViewTab } from '../types/inventory';
+import { getCentralHome, getHomeLabel, normalizeHomesList } from '../utils/inventory';
 import { formatRupiah } from '../utils/receiptScanner';
 
 interface ShoppingHistoryViewProps {
   receipts: ShoppingReceiptRecord[];
+  transfers?: StockTransferRecord[];
+  homes: HomeDefinition[];
   onOpenScanner: () => void;
   onDeleteReceipt?: (id: string) => void;
   onNavigateToTab: (tab: ViewTab) => void;
@@ -28,12 +33,16 @@ interface ShoppingHistoryViewProps {
 
 export const ShoppingHistoryView: React.FC<ShoppingHistoryViewProps> = ({
   receipts,
+  transfers = [],
+  homes,
   onOpenScanner,
   onDeleteReceipt,
   onNavigateToTab
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(receipts[0]?.id || null);
   const [searchQuery, setSearchQuery] = useState('');
+  const normalizedHomes = normalizeHomesList(homes);
+  const centralHome = getCentralHome(normalizedHomes);
 
   // Calculate cumulative lifetime stats
   const totalSpentAll = receipts.reduce((sum, r) => sum + (Number(r.totalSpent) || 0), 0);
@@ -186,18 +195,22 @@ export const ShoppingHistoryView: React.FC<ShoppingHistoryViewProps> = ({
                 onClick={() => setExpandedId(isExpanded ? null : record.id)}
                 className="p-4 sm:p-6 cursor-pointer hover:bg-stone-50/70 transition-colors flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
               >
-                <div className="flex items-start sm:items-center space-x-3.5">
+                <div className="flex items-start sm:items-center space-x-3.5 min-w-0 w-full sm:w-auto">
                   <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-600 flex items-center justify-center shrink-0">
                     <Store className="w-6 h-6" />
                   </div>
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="font-extrabold text-base sm:text-lg text-stone-900">
+                      <h3 className="font-extrabold text-base sm:text-lg text-stone-900 break-words">
                         {record.storeName}
                       </h3>
                       <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-stone-100 text-stone-700 border border-stone-200 flex items-center space-x-1">
                         <Calendar className="w-3 h-3 text-stone-500" />
                         <span>{record.purchaseDate}</span>
+                      </span>
+                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-900 border border-amber-200 flex items-center space-x-1">
+                        <Home className="w-3 h-3 text-amber-600" />
+                        <span>{getHomeLabel(record.destinationHomeId || centralHome.id, true, normalizedHomes)}</span>
                       </span>
                       {record.scannedBy && (
                         <span className="text-[10px] text-stone-500">
@@ -371,6 +384,45 @@ export const ShoppingHistoryView: React.FC<ShoppingHistoryViewProps> = ({
           );
         })}
       </div>
+      {/* Inter-Home Stock Picks / Transfers Ledger */}
+      {transfers.length > 0 && (
+        <div className="bg-white rounded-3xl border border-stone-200/90 shadow-sm p-5 sm:p-6 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-black uppercase tracking-wider text-stone-800 flex items-center space-x-2">
+              <ArrowRightLeft className="w-4 h-4 text-amber-600" />
+              <span>Recent Home Stock Picks ({centralHome.name} → Other Homes)</span>
+            </h3>
+            <span className="text-xs font-semibold text-stone-500">
+              {transfers.length} transfer{transfers.length === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          <div className="divide-y divide-stone-100">
+            {transfers.slice(0, 15).map(tr => (
+              <div
+                key={tr.id}
+                className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-stone-900">{tr.itemName}</span>
+                  <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 font-bold font-mono">
+                    {tr.quantity} {tr.unit || 'units'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-stone-600">
+                  <span className="font-semibold">{getHomeLabel(tr.fromHomeId, false, normalizedHomes)}</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-amber-600" />
+                  <span className="font-bold text-stone-900">{getHomeLabel(tr.toHomeId, false, normalizedHomes)}</span>
+                  <span className="text-stone-400">•</span>
+                  <span className="text-[11px] text-stone-400">
+                    {new Date(tr.transferredAt).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

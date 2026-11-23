@@ -71,6 +71,12 @@ service cloud.firestore {
         allow get, list: if isSignedIn();
         allow create, update, delete: if isSignedIn();
       }
+
+      // Shared Inter-Home Stock Transfers (e.g. Home 1 Central -> Home 2 / Home 3)
+      match /transfers/{transferId} {
+        allow get, list: if isSignedIn();
+        allow create, update, delete: if isSignedIn();
+      }
     }
 
     // Household Email Invitations

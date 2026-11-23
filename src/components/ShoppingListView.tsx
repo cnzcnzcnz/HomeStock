@@ -11,11 +11,18 @@ import {
   PackageCheck,
   AlertCircle
 } from 'lucide-react';
-import { Item } from '../types/inventory';
-import { getShoppingList } from '../utils/inventory';
+import { HomeDefinition, Item } from '../types/inventory';
+import {
+  getCentralHome,
+  getHomeLabel,
+  getNormalizedHomeStocks,
+  getShoppingList,
+  normalizeHomesList
+} from '../utils/inventory';
 
 interface ShoppingListViewProps {
   items: Item[];
+  homes: HomeDefinition[];
   onRestockItem: (id: string, targetMonthlyStock: number) => void;
   onIncrementStock: (id: string) => void;
   onRestockAll: () => void;
@@ -24,6 +31,7 @@ interface ShoppingListViewProps {
 
 export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   items,
+  homes,
   onRestockItem,
   onIncrementStock,
   onRestockAll,
@@ -32,6 +40,8 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   const [copied, setCopied] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [checkedIds, setCheckedIds] = useState<Record<string, boolean>>({});
+  const normalizedHomes = normalizeHomesList(homes);
+  const centralHome = getCentralHome(normalizedHomes);
 
   // Filter ONLY items where Restock Qty > 0
   const shoppingItems = getShoppingList(items);
@@ -85,7 +95,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
             </span>
           </div>
           <p className="text-xs text-stone-500 mt-1">
-            Displaying only household essentials that have fallen below their monthly target stock.
+            Displaying household essentials below their monthly target quota. Restocking adds units to <strong>{centralHome.name} (Central)</strong>.
           </p>
         </div>
 
@@ -172,11 +182,11 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
             </div>
 
             {availableCategories.length > 1 && (
-              <div className="flex items-center space-x-1.5 overflow-x-auto text-xs">
+              <div className="flex items-center space-x-1.5 overflow-x-auto w-full max-w-full sm:w-auto pb-1 text-xs">
                 <button
                   type="button"
                   onClick={() => setSelectedCategory('all')}
-                  className={`px-2.5 py-1 rounded-full font-medium transition-all ${
+                  className={`shrink-0 px-2.5 py-1 rounded-full font-medium transition-all ${
                     selectedCategory === 'all'
                       ? 'bg-stone-900 text-white'
                       : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-100'
@@ -189,7 +199,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                     key={cat}
                     type="button"
                     onClick={() => setSelectedCategory(cat)}
-                    className={`px-2.5 py-1 rounded-full font-medium whitespace-nowrap transition-all ${
+                    className={`shrink-0 px-2.5 py-1 rounded-full font-medium whitespace-nowrap transition-all ${
                       selectedCategory === cat
                         ? 'bg-stone-900 text-white'
                         : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-100'
@@ -216,11 +226,11 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                   }`}
                 >
                   {/* Item Left: Checkbox + Photo + Info */}
-                  <div className="flex items-center space-x-4 flex-1">
+                  <div className="flex items-start sm:items-center space-x-3 sm:space-x-4 flex-1 w-full min-w-0">
                     <button
                       type="button"
                       onClick={() => toggleCheck(item.id)}
-                      className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-colors shrink-0 ${
+                      className={`w-6 h-6 mt-1 sm:mt-0 rounded-lg border flex items-center justify-center transition-colors shrink-0 ${
                         isChecked
                           ? 'bg-emerald-600 border-emerald-600 text-white'
                           : 'border-stone-300 hover:border-amber-500 bg-white'
@@ -241,36 +251,47 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                       />
                     </div>
 
-                    <div>
-                      <div className="flex items-center space-x-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
                         <h4
-                          className={`font-bold text-stone-900 text-sm sm:text-base ${
+                          className={`font-bold text-stone-900 text-sm sm:text-base break-words ${
                             isChecked ? 'line-through text-stone-400' : ''
                           }`}
                         >
                           {item.itemName}
                         </h4>
                         {isCritical && (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700 border border-rose-200">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700 border border-rose-200 shrink-0">
                             Out of Stock
                           </span>
                         )}
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-500 mt-1">
+                      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-stone-500 mt-1">
+                        <span className="bg-amber-50 text-amber-900 border border-amber-200 px-2 py-0.5 rounded font-semibold">
+                          {getHomeLabel(item.homeId, true, normalizedHomes)}
+                        </span>
                         <span className="bg-stone-100 px-2 py-0.5 rounded text-stone-600">
                           {item.category}
                         </span>
                         {item.location && <span>📍 {item.location}</span>}
                         <span>
-                          Current: <strong className="text-stone-800">{item.currentStock}</strong> / Target: {item.targetMonthlyStock}
+                          Total: <strong className="text-stone-800">{item.currentStock}</strong> / Target: {item.targetMonthlyStock}
                         </span>
+                        {(() => {
+                          const hs = getNormalizedHomeStocks(item, normalizedHomes);
+                          return (
+                            <span className="font-mono text-[11px] text-stone-500 break-words">
+                              ({normalizedHomes.map(h => `${h.name}:${hs[h.id] ?? 0}`).join(' · ')})
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>
 
                   {/* Item Right: Restock Qty Badge + Quick Actions */}
-                  <div className="flex items-center space-x-3 w-full sm:w-auto justify-between sm:justify-end border-t sm:border-t-0 pt-2 sm:pt-0">
+                  <div className="flex items-center space-x-3 w-full sm:w-auto justify-between sm:justify-end border-t border-stone-100 sm:border-t-0 pt-2 sm:pt-0">
                     <div className="text-right">
                       <span className="text-[10px] uppercase tracking-wider font-semibold text-stone-400 block">
                         Buy Quantity

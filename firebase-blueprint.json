@@ -34,7 +34,17 @@
         },
         "currentStock": {
           "type": "number",
-          "description": "Current on-hand stock quantity"
+          "description": "Current total on-hand stock quantity across all homes"
+        },
+        "homeId": {
+          "type": "string",
+          "description": "Primary home identifier (e.g. home-1, home-2, or custom added home ID)",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "homeStocks": {
+          "type": "object",
+          "description": "Per-home stock map keyed by dynamic home IDs"
         },
         "unit": {
           "type": "string",
@@ -57,12 +67,39 @@
         }
       },
       "required": [
-        "userId",
         "itemName",
         "category",
         "targetMonthlyStock",
         "currentStock"
       ]
+    },
+    "HomeDefinition": {
+      "title": "HomeDefinition",
+      "description": "Customizable home category (e.g. Home 1 Central, Home 2, or user-added homes)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "name": { "type": "string", "maxLength": 60 },
+        "isCentral": { "type": "boolean" }
+      },
+      "required": ["id", "name"]
+    },
+    "StockTransfer": {
+      "title": "StockTransfer",
+      "description": "Record of stock picked/transferred from Central Home to another home",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "itemId": { "type": "string" },
+        "itemName": { "type": "string", "maxLength": 150 },
+        "fromHomeId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "toHomeId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "quantity": { "type": "number" },
+        "unit": { "type": "string", "maxLength": 50 },
+        "transferredAt": { "type": "string" },
+        "transferredBy": { "type": "string", "maxLength": 150 }
+      },
+      "required": ["id", "itemId", "itemName", "fromHomeId", "toHomeId", "quantity", "transferredAt"]
     },
     "UserProfile": {
       "title": "UserProfile",
@@ -105,7 +142,15 @@
     },
     "/users/{userId}/items/{itemId}": {
       "schema": "Item",
-      "description": "Household inventory items belonging to the user"
+      "description": "Legacy individual household inventory items belonging to the user"
+    },
+    "/households/{householdId}/items/{itemId}": {
+      "schema": "Item",
+      "description": "Shared household inventory items across Home 1 (Central), Home 2, and Home 3"
+    },
+    "/households/{householdId}/transfers/{transferId}": {
+      "schema": "StockTransfer",
+      "description": "Stock pick/transfer logs from Home 1 Central to Home 2 and Home 3"
     }
   }
 }

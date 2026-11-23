@@ -170,25 +170,24 @@ export const Navbar: React.FC<NavbarProps> = ({
           </nav>
 
           {/* Action & Auth Controls (Right Side) */}
-          <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
+          <div className="flex items-center space-x-1 sm:space-x-2 shrink-0">
             {/* Scan Receipt AI button */}
             <button
               type="button"
               onClick={onOpenReceiptScanner}
-              className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-stone-950 font-black text-xs rounded-lg shadow-sm transition-all active:scale-95"
+              className="flex items-center justify-center space-x-1.5 p-2 sm:px-3 sm:py-1.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-stone-950 font-black text-xs rounded-lg shadow-sm transition-all active:scale-95 shrink-0"
               title="Scan Receipt with OpenAI Vision"
               aria-label="Scan Receipt with OpenAI Vision"
             >
               <Receipt className="w-3.5 h-3.5 stroke-[2.5]" />
-              <span className="hidden sm:inline">Scan</span>
-              <span>Receipt</span>
+              <span className="hidden sm:inline">Scan Receipt</span>
             </button>
 
             {/* Add Item button */}
             <button
               type="button"
               onClick={onOpenAddItem}
-              className="flex items-center space-x-1 px-2 sm:px-2.5 py-1.5 bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs rounded-lg border border-stone-700 transition-all active:scale-95 shadow-sm"
+              className="flex items-center justify-center space-x-1 p-2 sm:px-2.5 sm:py-1.5 bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs rounded-lg border border-stone-700 transition-all active:scale-95 shadow-sm shrink-0"
               aria-label="Add new item"
               title="Add Item"
             >
@@ -202,7 +201,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               onClick={onResetSampleData}
               title="Reset inventory to default sample presets"
               aria-label="Reset sample inventory"
-              className="p-1.5 rounded-lg text-stone-400 hover:text-stone-200 hover:bg-stone-800 transition-colors text-xs"
+              className="p-2 sm:p-1.5 rounded-lg text-stone-400 hover:text-stone-200 hover:bg-stone-800 transition-colors text-xs shrink-0"
             >
               <RefreshCw className="w-3.5 h-3.5" />
             </button>
@@ -211,7 +210,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button
               type="button"
               onClick={onOpenHousehold}
-              className={`flex items-center space-x-1 px-2 sm:px-2.5 py-1.5 rounded-lg border transition-all text-xs font-semibold active:scale-95 shadow-sm cursor-pointer ${
+              className={`flex items-center justify-center space-x-1 p-2 sm:px-2.5 sm:py-1.5 rounded-lg border transition-all text-xs font-semibold active:scale-95 shadow-sm cursor-pointer shrink-0 ${
                 user
                   ? 'bg-stone-800 hover:bg-stone-700 text-stone-200 hover:text-white border-stone-700'
                   : 'bg-stone-800/60 hover:bg-stone-800 text-stone-300 hover:text-white border-stone-700/80'
@@ -230,7 +229,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             {/* Google Authentication Control */}
             {user ? (
-              <div className="flex items-center space-x-1.5 pl-1.5 sm:pl-2 border-l border-stone-800">
+              <div className="flex items-center space-x-1 sm:space-x-1.5 pl-1 sm:pl-2 border-l border-stone-800 shrink-0">
                 {user.photoURL ? (
                   <img
                     src={user.photoURL}
@@ -261,7 +260,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               <button
                 type="button"
                 onClick={onLogin}
-                className="flex items-center space-x-1 px-2 sm:px-2.5 py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-100 font-semibold text-[11px] sm:text-xs rounded-lg border border-stone-700 transition-all active:scale-95 shadow-sm"
+                className="flex items-center justify-center space-x-1.5 p-2 sm:px-2.5 sm:py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-100 font-semibold text-xs rounded-lg border border-stone-700 transition-all active:scale-95 shadow-sm shrink-0"
                 aria-label="Sign in with Google"
                 title="Sign in with Google"
               >
@@ -284,7 +283,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                   />
                 </svg>
                 <span className="hidden sm:inline">Login</span>
-                <span className="sm:hidden">Login</span>
               </button>
             )}
           </div>

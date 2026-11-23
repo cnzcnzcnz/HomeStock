@@ -23,8 +23,15 @@ import {
   Unsubscribe
 } from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured } from './config';
-import { Item, ShoppingReceiptRecord } from '../types/inventory';
+import { Item, ShoppingReceiptRecord, StockTransferRecord, HomeId, HomeDefinition } from '../types/inventory';
 import { Household, HouseholdInvite, HouseholdMember } from '../types/household';
+import {
+  DEFAULT_HOMES,
+  normalizeHomesList,
+  normalizeItemHomes,
+  getNormalizedHomeStocks,
+  getTotalStockFromHomes
+} from '../utils/inventory';
 
 // Initialize Firebase with resolved configuration
 const app = initializeApp(firebaseConfig);
@@ -176,7 +183,8 @@ export async function getOrCreateHousehold(user: User): Promise<Household> {
         const hData = householdSnap.data() as Household;
         return {
           ...hData,
-          id: householdSnap.id
+          id: householdSnap.id,
+          homes: normalizeHomesList(hData.homes)
         };
       }
     } catch (err) {
@@ -195,7 +203,8 @@ export async function getOrCreateHousehold(user: User): Promise<Household> {
       const existingData = defaultSnap.data() as Household;
       return {
         ...existingData,
-        id: defaultSnap.id
+        id: defaultSnap.id,
+        homes: normalizeHomesList(existingData.homes)
       };
     }
   } catch (err) {
@@ -218,6 +227,7 @@ export async function getOrCreateHousehold(user: User): Promise<Household> {
     memberUids: [user.uid],
     memberEmails: userEmail ? [userEmail] : [],
     members: [initialMember],
+    homes: DEFAULT_HOMES.map(h => ({ ...h })),
     createdAt: new Date().toISOString(),
     inviteCode: generateInviteCode()
   };
@@ -256,9 +266,36 @@ export function subscribeToHousehold(
   const householdRef = doc(db, 'households', householdId);
   return onSnapshot(householdRef, (snap) => {
     if (snap.exists()) {
-      onUpdate({ ...(snap.data() as Household), id: snap.id });
+      const raw = snap.data() as Household;
+      onUpdate({
+        ...raw,
+        id: snap.id,
+        homes: normalizeHomesList(raw.homes)
+      });
     }
   });
+}
+
+/**
+ * Persist updated/renamed/added homes list onto the shared household document
+ */
+export async function updateHouseholdHomes(
+  householdId: string,
+  homes: HomeDefinition[]
+): Promise<void> {
+  const householdPath = `households/${householdId}`;
+  try {
+    const householdRef = doc(db, 'households', householdId);
+    await setDoc(
+      householdRef,
+      {
+        homes: normalizeHomesList(homes)
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, householdPath);
+  }
 }
 
 /**
@@ -278,13 +315,22 @@ export function subscribeToHouseholdItems(
       const items: Item[] = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
+        const rawHomeId: HomeId =
+          typeof data.homeId === 'string' && data.homeId.trim() ? data.homeId.trim() : 'home-1';
+        const homeStocks = getNormalizedHomeStocks({
+          currentStock: Number(data.currentStock) || 0,
+          homeId: rawHomeId,
+          homeStocks: data.homeStocks
+        });
         items.push({
           id: docSnap.id,
           itemName: data.itemName || '',
           category: data.category || 'General Supplies',
           photo: data.photo || '',
           targetMonthlyStock: Number(data.targetMonthlyStock) || 0,
-          currentStock: Number(data.currentStock) || 0,
+          currentStock: getTotalStockFromHomes(homeStocks),
+          homeId: rawHomeId,
+          homeStocks,
           unit: data.unit || 'units',
           location: data.location || '',
           notes: data.notes || '',
@@ -309,6 +355,8 @@ export async function saveHouseholdItem(
   user?: User | null
 ): Promise<void> {
   const itemPath = `households/${householdId}/items/${item.id}`;
+  const normalizedHomeStocks = getNormalizedHomeStocks(item);
+  const resolvedTotal = getTotalStockFromHomes(normalizedHomeStocks);
   try {
     const itemRef = doc(db, 'households', householdId, 'items', item.id);
     await setDoc(
@@ -319,7 +367,9 @@ export async function saveHouseholdItem(
         category: item.category,
         photo: item.photo,
         targetMonthlyStock: item.targetMonthlyStock,
-        currentStock: item.currentStock,
+        currentStock: resolvedTotal,
+        homeId: item.homeId || 'home-1',
+        homeStocks: normalizedHomeStocks,
         unit: item.unit || 'units',
         location: item.location || '',
         notes: item.notes || '',
@@ -498,18 +548,22 @@ export async function getLegacyUserItems(userId: string): Promise<Item[]> {
     const legacy: Item[] = [];
     snap.forEach(docSnap => {
       const data = docSnap.data();
-      legacy.push({
-        id: docSnap.id,
-        itemName: data.itemName || '',
-        category: data.category || 'General Supplies',
-        photo: data.photo || '',
-        targetMonthlyStock: Number(data.targetMonthlyStock) || 0,
-        currentStock: Number(data.currentStock) || 0,
-        unit: data.unit || 'units',
-        location: data.location || '',
-        notes: data.notes || '',
-        updatedAt: data.updatedAt || new Date().toISOString()
-      });
+      legacy.push(
+        normalizeItemHomes({
+          id: docSnap.id,
+          itemName: data.itemName || '',
+          category: data.category || 'General Supplies',
+          photo: data.photo || '',
+          targetMonthlyStock: Number(data.targetMonthlyStock) || 0,
+          currentStock: Number(data.currentStock) || 0,
+          homeId: data.homeId || 'home-1',
+          homeStocks: data.homeStocks,
+          unit: data.unit || 'units',
+          location: data.location || '',
+          notes: data.notes || '',
+          updatedAt: data.updatedAt || new Date().toISOString()
+        })
+      );
     });
     return legacy;
   } catch (err) {
@@ -598,6 +652,49 @@ export function subscribeToHouseholdReceipts(
     (error) => {
       if (onError) onError(error);
       console.warn('Receipts listener notice:', error);
+    }
+  );
+}
+
+/**
+ * Save a Home 1 -> Home 2/3 stock pick/transfer record to the shared household
+ */
+export async function saveHouseholdTransfer(
+  householdId: string,
+  transfer: StockTransferRecord
+): Promise<void> {
+  const transferPath = `households/${householdId}/transfers/${transfer.id}`;
+  try {
+    const transferRef = doc(db, 'households', householdId, 'transfers', transfer.id);
+    await setDoc(transferRef, transfer, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, transferPath);
+  }
+}
+
+/**
+ * Subscribe to household inter-home stock transfers in real-time
+ */
+export function subscribeToHouseholdTransfers(
+  householdId: string,
+  onUpdate: (transfers: StockTransferRecord[]) => void,
+  onError?: (error: unknown) => void
+): Unsubscribe {
+  const transfersCol = collection(db, 'households', householdId, 'transfers');
+
+  return onSnapshot(
+    transfersCol,
+    (snapshot) => {
+      const records: StockTransferRecord[] = [];
+      snapshot.forEach(docSnap => {
+        records.push({ ...(docSnap.data() as StockTransferRecord), id: docSnap.id });
+      });
+      records.sort((a, b) => new Date(b.transferredAt).getTime() - new Date(a.transferredAt).getTime());
+      onUpdate(records);
+    },
+    (error) => {
+      if (onError) onError(error);
+      console.warn('Transfers listener notice:', error);
     }
   );
 }
