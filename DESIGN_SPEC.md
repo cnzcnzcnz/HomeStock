@@ -2,7 +2,7 @@
 
 **Document Status:** Living Specification (Source of Truth)  
 **Product Name:** Stoku! — Household Inventory & Shopping Manager  
-**Last Updated:** 2026-11-22  
+**Last Updated:** 2026-11-26  
 **Tech Stack:** React 19, TypeScript, Vite 8, Tailwind CSS v4, Firebase Auth & Firestore (`firebase` v9), OpenAI SDK (`openai` v7), Lucide React  
 
 > **Maintenance Rule for Future Changes:**  
@@ -401,6 +401,7 @@ export interface Household {
 ### 7.1 Module Map
 ```
 /
+├── README.md                     # End-user guide, features, local quick start & optional setup
 ├── DESIGN_SPEC.md                # This living design & engineering specification
 ├── index.html                    # Entry HTML ("Stoku!" title/OG tags, Plus Jakarta Sans font)
 ├── firestore.rules               # Firestore security rules
@@ -468,6 +469,11 @@ export interface Household {
 ---
 
 ## 10. Detailed Changelog
+
+### [2026-11-26] — End-User `README.md` Documentation
+- **Files:** `README.md`, `DESIGN_SPEC.md`
+- **Details:**
+  - Added `/README.md` tailored for general users and self-hosters covering core multi-home features, step-by-step usage (offline sandbox, dynamic home management, AI receipt scanning, and Google Family Sharing), local startup commands (`npm install`, `npm run dev`), optional OpenAI & Firebase environment setup, and test/build commands.
 
 ### [2026-11-22] — Dynamic & Renamable Multi-Home Management + Mobile Shopping List Overflow Fix
 - **Files:** `src/types/inventory.ts`, `src/types/household.ts`, `src/utils/inventory.ts`, `src/utils/inventory.test.ts`, `src/lib/firebase.ts`, `firebase-blueprint.json`, `src/components/ManageHomesModal.tsx`, `src/components/HomeFilterBar.tsx`, `src/components/PickFromHomeModal.tsx`, `src/components/GridView.tsx`, `src/components/ItemCard.tsx`, `src/components/ItemsTable.tsx`, `src/components/ItemModal.tsx`, `src/components/ShoppingListView.tsx`, `src/components/ReceiptScannerModal.tsx`, `src/components/ShoppingHistoryView.tsx`, `src/App.tsx`, `DESIGN_SPEC.md`
